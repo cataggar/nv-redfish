@@ -81,6 +81,27 @@ impl<B: Bmc> NvidiaManager<B> {
         self.data.clone()
     }
 
+    /// Whether the BMC side of the DPU rshim interface is enabled.
+    ///
+    /// Reads `BmcRShim.BmcRShimEnabled` from the resource linked from
+    /// `Oem.Nvidia`, where [`Self::set_bmc_rshim_enabled`] writes it.
+    /// Returns `Ok(None)` when the OEM object links no resource or the
+    /// resource does not report the setting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fetching or parsing the linked resource fails.
+    pub async fn bmc_rshim_enabled(&self) -> Result<Option<bool>, Error<B>> {
+        let Some(id) = &self.oem_resource else {
+            return Ok(None);
+        };
+        let resource: NvidiaManagerSchema = self.bmc.get_raw(id).await?;
+        Ok(resource
+            .bmc_rshim
+            .as_ref()
+            .and_then(|rshim| rshim.bmc_rshim_enabled))
+    }
+
     /// Enable or disable the BMC side of the DPU rshim interface.
     ///
     /// Patches `BmcRShim.BmcRShimEnabled` on the resource linked from
