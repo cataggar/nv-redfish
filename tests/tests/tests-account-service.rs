@@ -949,7 +949,7 @@ async fn dell_standard_collection_uses_post_and_resource_delete() -> TestResult<
 }
 
 // Create account (HPE-like vendor): response omits `AccountTypes`, expect
-// defaulting to `[Redfish]` via read patching.
+// defaulting to `[Redfish]` by the compatibility layer's repair.
 #[test]
 async fn create_account_hpe_patched() -> TestResult<()> {
     let (bmc, accounts_id, accounts) = account_fixture("HPE", &[]).await?;
@@ -1426,5 +1426,46 @@ async fn list_dell_accounts_hide_disabled() -> TestResult<()> {
 
     assert_eq!(ids, vec!["1", "4"]);
 
+    Ok(())
+}
+
+/// An HPE account as iLO answers an update: without `AccountTypes`.
+fn hpe_account_reply(accounts_id: &str) -> JsonValue {
+    json!({
+        ODATA_ID: format!("{accounts_id}/1"),
+        ODATA_TYPE: MANAGER_ACCOUNT_DATA_TYPE,
+        "Id": "1",
+        "Name": "User Account",
+        "Enabled": true,
+        "UserName": "user",
+        "RoleId": "Operator",
+    })
+}
+
+// Update account (HPE-like vendor): the reply omits `AccountTypes`, which
+// the compatibility layer's repair supplies; the account is not read back.
+#[test]
+async fn update_account_hpe_repairs_the_reply() -> TestResult<()> {
+    let (bmc, accounts_id, accounts) = account_fixture("HPE", &[(1, true, "user")]).await?;
+    let account = accounts
+        .all_accounts_data()
+        .await?
+        .into_iter()
+        .next()
+        .ok_or("account missing")?;
+    let account_id = format!("{accounts_id}/1");
+    let update = ManagerAccountUpdate::builder()
+        .with_role_id("Operator".into())
+        .build();
+
+    bmc.expect(Expect::update(
+        &account_id,
+        serde_json::to_value(&update)?,
+        hpe_account_reply(&accounts_id),
+    ));
+
+    let updated = into_entity(account.update(&update).await?).raw();
+    assert_eq!(updated.account_types, Some(vec![AccountTypes::Redfish]));
+    assert_eq!(updated.role_id, Some("Operator".into()));
     Ok(())
 }

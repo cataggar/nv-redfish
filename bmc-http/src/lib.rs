@@ -68,8 +68,11 @@ use nv_redfish_core::EntityTypeRef;
 use nv_redfish_core::Expandable;
 use nv_redfish_core::FilterQuery;
 use nv_redfish_core::ModificationResponse;
+use nv_redfish_core::NoRepair;
 use nv_redfish_core::ODataETag;
 use nv_redfish_core::ODataId;
+use nv_redfish_core::Repair;
+use nv_redfish_core::RepairError;
 use nv_redfish_core::SessionCreateResponse;
 use nv_redfish_core::StreamEvent;
 use nv_redfish_core::UploadReader;
@@ -96,16 +99,20 @@ pub use nv_redfish_core::MultipartUpdateRequest;
 /// nv-redfish-bmc-http supports any HTTP implementation that
 /// implements this [`HttpClient`] trait.
 pub trait HttpClient: Send + Sync {
-    /// HTTP client error.
-    type Error: BmcError;
+    /// HTTP client error. A document that does not deserialize into the
+    /// type a read asks for is one [`BmcError::into_decode_error`] gives
+    /// back, so a repaired read reports it as [`RepairError::Decode`].
+    type Error: BmcError + 'static;
 
-    /// Perform an HTTP GET request with optional conditional headers.
+    /// Perform an HTTP GET request with optional conditional headers,
+    /// applying `repair` to the document before it is deserialized.
     fn get<T>(
         &self,
         url: Url,
         credentials: &BmcCredentials,
         etag: Option<ODataETag>,
         custom_headers: &HeaderMap,
+        repair: &impl Repair,
     ) -> impl Future<Output = Result<T, Self::Error>> + Send
     where
         T: DeserializeOwned + Send + Sync;
@@ -610,6 +617,7 @@ where
     async fn get_with_cache<T: EntityTypeRef + for<'de> Deserialize<'de> + 'static>(
         &self,
         endpoint_url: Url,
+        repair: &impl Repair,
     ) -> Result<Arc<T>, C::Error> {
         let cache_key = endpoint_url.clone();
 
@@ -643,6 +651,7 @@ where
                 credentials.as_ref(),
                 etag,
                 &self.custom_headers,
+                repair,
             )
             .await
         {
@@ -687,7 +696,7 @@ where
         id: &ODataId,
     ) -> Result<Arc<T>, Self::Error> {
         let endpoint_url = self.redfish_endpoint.with_odata_id(id);
-        self.get_with_cache(endpoint_url).await
+        self.get_with_cache(endpoint_url, &NoRepair).await
     }
 
     async fn expand<T: Expandable + 'static>(
@@ -699,7 +708,46 @@ where
             .redfish_endpoint
             .with_odata_id_and_query(id, &query.to_query_string());
 
-        self.get_with_cache(endpoint_url).await
+        self.get_with_cache(endpoint_url, &NoRepair).await
+    }
+
+    async fn get_repaired<T: EntityTypeRef + for<'de> Deserialize<'de> + 'static>(
+        &self,
+        id: &ODataId,
+        repair: &impl Repair,
+    ) -> Result<Arc<T>, RepairError<Self::Error>> {
+        let endpoint_url = self.redfish_endpoint.with_odata_id(id);
+        self.get_with_cache(endpoint_url, repair)
+            .await
+            .map_err(RepairError::from_transport)
+    }
+
+    async fn expand_repaired<T: Expandable>(
+        &self,
+        id: &ODataId,
+        query: ExpandQuery,
+        repair: &impl Repair,
+    ) -> Result<Arc<T>, RepairError<Self::Error>> {
+        let endpoint_url = self
+            .redfish_endpoint
+            .with_odata_id_and_query(id, &query.to_query_string());
+        self.get_with_cache(endpoint_url, repair)
+            .await
+            .map_err(RepairError::from_transport)
+    }
+
+    async fn filter_repaired<T: EntityTypeRef + for<'de> Deserialize<'de> + 'static>(
+        &self,
+        id: &ODataId,
+        query: FilterQuery,
+        repair: &impl Repair,
+    ) -> Result<Arc<T>, RepairError<Self::Error>> {
+        let endpoint_url = self
+            .redfish_endpoint
+            .with_odata_id_and_query(id, &query.to_query_string());
+        self.get_with_cache(endpoint_url, repair)
+            .await
+            .map_err(RepairError::from_transport)
     }
 
     async fn create<V: Sync + Send + Serialize, R: Sync + Send + for<'de> Deserialize<'de>>(
@@ -845,7 +893,7 @@ where
             .redfish_endpoint
             .with_odata_id_and_query(id, &query.to_query_string());
 
-        self.get_with_cache(endpoint_url).await
+        self.get_with_cache(endpoint_url, &NoRepair).await
     }
 
     async fn stream<T: Send + Sized + for<'de> Deserialize<'de>>(

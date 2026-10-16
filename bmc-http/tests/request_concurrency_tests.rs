@@ -20,6 +20,9 @@ mod tests {
         MultipartUpdateRequest,
     };
     use nv_redfish_core::query::ExpandQuery;
+    use nv_redfish_core::NoRepair;
+    use nv_redfish_core::Repair;
+    use nv_redfish_core::RepairError;
     #[cfg(feature = "update-service-deprecated")]
     use nv_redfish_core::UploadStream;
     use nv_redfish_core::{
@@ -93,6 +96,7 @@ mod tests {
             _credentials: &BmcCredentials,
             _etag: Option<ODataETag>,
             _custom_headers: &HeaderMap,
+            _repair: &impl Repair,
         ) -> impl Future<Output = Result<T, Self::Error>> + Send
         where
             T: DeserializeOwned + Send + Sync,
@@ -339,6 +343,9 @@ mod tests {
         Get,
         Expand,
         Filter,
+        GetRepaired,
+        ExpandRepaired,
+        FilterRepaired,
         Create,
         CreateSession,
         Update,
@@ -355,6 +362,9 @@ mod tests {
                 Self::Get => "/get",
                 Self::Expand => "/expand",
                 Self::Filter => "/filter",
+                Self::GetRepaired => "/get-repaired",
+                Self::ExpandRepaired => "/expand-repaired",
+                Self::FilterRepaired => "/filter-repaired",
                 Self::Create => "/create",
                 Self::CreateSession => "/session",
                 Self::Update => "/update",
@@ -364,6 +374,14 @@ mod tests {
                 #[cfg(feature = "update-service-deprecated")]
                 Self::HttpPushUriUpdate => "/http-push-uri-update",
             }
+        }
+    }
+
+    /// A repaired read's failure, as the transport reports it.
+    fn transport_error(error: RepairError<BmcError>) -> BmcError {
+        match error {
+            RepairError::Transport(error) => error,
+            RepairError::Decode(error) => error.into(),
         }
     }
 
@@ -384,6 +402,24 @@ mod tests {
                 let _response = bmc
                     .filter::<TestResource>(&id, FilterQuery::eq(&"value", 1))
                     .await?;
+            }
+            Operation::GetRepaired => {
+                let _response = bmc
+                    .get_repaired::<TestResource>(&id, &NoRepair)
+                    .await
+                    .map_err(transport_error)?;
+            }
+            Operation::ExpandRepaired => {
+                let _response = bmc
+                    .expand_repaired::<TestResource>(&id, ExpandQuery::current(), &NoRepair)
+                    .await
+                    .map_err(transport_error)?;
+            }
+            Operation::FilterRepaired => {
+                let _response = bmc
+                    .filter_repaired::<TestResource>(&id, FilterQuery::eq(&"value", 1), &NoRepair)
+                    .await
+                    .map_err(transport_error)?;
             }
             Operation::Create => {
                 let _response = bmc
@@ -610,6 +646,9 @@ mod tests {
             Operation::Get,
             Operation::Expand,
             Operation::Filter,
+            Operation::GetRepaired,
+            Operation::ExpandRepaired,
+            Operation::FilterRepaired,
             Operation::Create,
             Operation::CreateSession,
             Operation::Update,
