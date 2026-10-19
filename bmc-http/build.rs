@@ -18,16 +18,10 @@ use nv_redfish_csdl_compiler::commands::Commands;
 use nv_redfish_schema::out_dir;
 use nv_redfish_schema::redfish_schema;
 use nv_redfish_schema::rerun_for;
-use std::env::var;
 use std::error::Error as StdError;
 
-/// Compiles the Redfish error and message schemas when `reqwest-client` is enabled.
+/// Compiles the Redfish error and message schemas.
 fn main() -> Result<(), Box<dyn StdError>> {
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REQWEST_CLIENT");
-    if var("CARGO_FEATURE_REQWEST_CLIENT").is_err() {
-        return Ok(());
-    }
-
     let root_csdls = ["RedfishError_v1.xml", "Message_v1.xml"]
         .iter()
         .map(|f| redfish_schema(f))

@@ -26,7 +26,7 @@ reqwest-native-tls = ["reqwest-client", "reqwest?/native-tls"]
 reqwest-rustls-no-provider = ["reqwest-client", "reqwest?/rustls-tls-webpki-roots-no-provider"]
 # The reqwest client without TLS, for plain HTTP; the features above add
 # TLS.
-reqwest-client = ["dep:reqwest", "dep:serde_path_to_error", "dep:futures-util", "dep:sse-stream", "dep:tokio-util", "dep:tokio", "tokio/time", "dep:bytes"]
+reqwest-client = ["dep:reqwest", "dep:futures-util", "dep:sse-stream", "dep:tokio-util", "dep:tokio", "tokio/time", "dep:bytes"]
 http-extras = ["dep:tokio", "tokio/sync"]
 update-service-deprecated = ["nv-redfish-core/update-service-deprecated"]
 
@@ -44,7 +44,7 @@ reqwest = { workspace = true, optional = true, features = [
 ] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_path_to_error = { workspace = true, optional = true }
+serde_path_to_error = { workspace = true }
 sse-stream = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true, features = ["compat", "io"] }
