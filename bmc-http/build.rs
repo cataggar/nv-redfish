@@ -18,15 +18,9 @@ use nv_redfish_csdl_compiler::commands::Commands;
 use nv_redfish_schema::out_dir;
 use nv_redfish_schema::redfish_schema;
 use nv_redfish_schema::rerun_for;
-use std::env::var;
 use std::error::Error as StdError;
 
 fn main() -> Result<(), Box<dyn StdError>> {
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REQWEST");
-    if var("CARGO_FEATURE_REQWEST").is_err() {
-        return Ok(());
-    }
-
     let root_csdls = ["RedfishError_v1.xml", "Message_v1.xml"]
         .iter()
         .map(|f| redfish_schema(f))

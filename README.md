@@ -26,6 +26,9 @@ your client needs, or use `std-redfish` for a broad standard Redfish build.
     `HttpClient` trait.
   - The built-in reqwest client is behind the `reqwest` feature, enabled by
     default for this crate.
+  - Provides `decode_modification` and `decode_poll`, so an `HttpClient` over
+    another HTTP library decodes the responses to modifications and polls as
+    the reqwest client does, success messages included.
   - Supports custom default headers and session-token credential updates, so
     callers can use either basic credentials or a Redfish `X-Auth-Token`.
   - Applies a `Repair` in its own decode. Its cache keeps each resource as
