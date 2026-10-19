@@ -26,7 +26,6 @@ mod reqwest_client_tests {
     use nv_redfish_bmc_http::reqwest::Client;
     use nv_redfish_bmc_http::reqwest::ClientParams;
     use nv_redfish_bmc_http::reqwest::RetryPolicy;
-    #[cfg(any(feature = "http-extras", feature = "update-service-deprecated"))]
     use nv_redfish_bmc_http::BmcCredentials;
     use nv_redfish_bmc_http::CacheSettings;
     use nv_redfish_bmc_http::HttpBmc;
