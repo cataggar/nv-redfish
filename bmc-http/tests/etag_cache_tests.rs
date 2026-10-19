@@ -15,7 +15,7 @@
 
 mod common;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod cache_integration_tests {
     use std::{error::Error, sync::Arc};
 

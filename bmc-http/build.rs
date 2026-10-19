@@ -22,8 +22,8 @@ use std::env::var;
 use std::error::Error as StdError;
 
 fn main() -> Result<(), Box<dyn StdError>> {
-    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REQWEST");
-    if var("CARGO_FEATURE_REQWEST").is_err() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_REQWEST_CLIENT");
+    if var("CARGO_FEATURE_REQWEST_CLIENT").is_err() {
         return Ok(());
     }
 

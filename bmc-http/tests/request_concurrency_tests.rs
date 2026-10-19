@@ -3,7 +3,7 @@
 
 mod common;
 
-#[cfg(all(feature = "reqwest", feature = "http-extras"))]
+#[cfg(all(feature = "reqwest-client", feature = "http-extras"))]
 mod tests {
     use std::future::Future;
     use std::num::NonZeroUsize;

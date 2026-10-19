@@ -15,7 +15,7 @@
 
 mod common;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod reqwest_client_tests {
     #[cfg(feature = "http-extras")]
     use std::num::NonZeroUsize;
