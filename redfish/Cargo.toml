@@ -37,8 +37,11 @@ bmc-http-rustls-no-provider = [
     "dep:nv-redfish-bmc-http",
     "nv-redfish-bmc-http/reqwest-rustls-no-provider",
 ]
+# Re-exports nv-redfish-bmc-http as `bmc_http` with optional HTTP client
+# capabilities (such as per-BMC operation concurrency limits) without
+# selecting a reqwest TLS backend.
 http-extras = [
-    "bmc-http",
+    "dep:nv-redfish-bmc-http",
     "nv-redfish-bmc-http/http-extras",
 ]
 resource-serialization = []

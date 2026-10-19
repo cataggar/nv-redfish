@@ -65,7 +65,7 @@ std-not-standalone-features = assembly \
 
 std-standalone-features = $(filter-out $(std-not-standalone-features),$(all-std-features))
 
-ci-features-list := $(subst $(space),$(comma),$(all-std-features)),http-extras,resource-serialization
+ci-features-list := $(subst $(space),$(comma),$(all-std-features)),bmc-http,http-extras,resource-serialization
 
 # Feature sets whose only job is to prove the configuration type checks.
 # Nothing downstream consumes the artifacts, so they run under `cargo check`:
@@ -130,7 +130,9 @@ no-ring-builds = nv-redfish-bmc-http:reqwest-client \
              nv-redfish-bmc-http:reqwest-native-tls \
              nv-redfish-bmc-http:reqwest-rustls-no-provider \
              nv-redfish:bmc-http-native-tls \
-             nv-redfish:bmc-http-rustls-no-provider
+             nv-redfish:bmc-http-rustls-no-provider \
+             nv-redfish:bmc-http-native-tls,http-extras \
+             nv-redfish:bmc-http-rustls-no-provider,http-extras
 
 no-ring-args = -p $(word 1,$(subst :, ,$1)) --no-default-features --features $(word 2,$(subst :, ,$1))
 check-no-ring = $(indent)cargo check $(call no-ring-args,$1)$(new-line)$(indent)tree=$$(cargo tree $(call no-ring-args,$1) -e no-dev --prefix none) && ! printf '%s\n' "$$tree" | grep '^ring '$(new-line)
@@ -147,6 +149,7 @@ define build-and-test
 	cargo check -p nv-redfish-bmc-http --no-default-features --features http-extras
 	$(foreach b,$(no-ring-builds),$(call check-no-ring,$b))
 	cargo test -p nv-redfish-bmc-http --no-default-features --features reqwest-native-tls --test reqwest_client_tests
+	cargo test -p nv-redfish-bmc-http --no-default-features --features reqwest-rustls-no-provider --test reqwest_client_tests
 	cargo check -p nv-redfish-tests --tests
 	cargo check -p nv-redfish-bmc-mock
 	cargo build -p update-multipart --features update-service-deprecated

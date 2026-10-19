@@ -201,7 +201,8 @@ pub use nv_redfish_quirks as quirks;
 #[cfg(any(
     feature = "bmc-http",
     feature = "bmc-http-native-tls",
-    feature = "bmc-http-rustls-no-provider"
+    feature = "bmc-http-rustls-no-provider",
+    feature = "http-extras"
 ))]
 #[doc(inline)]
 pub use nv_redfish_bmc_http as bmc_http;

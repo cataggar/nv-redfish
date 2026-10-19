@@ -160,6 +160,7 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
+    /// Verifies that the SSE stream aborts when an event exceeds `sse_max_event_bytes`.
     #[tokio::test]
     async fn sse_aborts_when_event_exceeds_byte_limit() {
         use nv_redfish_bmc_http::reqwest::{Client, ClientParams};
@@ -184,6 +185,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
+        install_test_crypto_provider();
         let client = Client::with_params(ClientParams::new().sse_max_event_bytes(16)).unwrap();
         let bmc = HttpBmc::new(
             client,
@@ -205,6 +207,7 @@ mod tests {
         );
     }
 
+    /// Verifies that the SSE stream aborts when no frame arrives within `sse_idle_timeout`.
     #[tokio::test]
     async fn sse_aborts_on_idle_timeout() {
         use nv_redfish_bmc_http::reqwest::{Client, ClientParams};
@@ -247,6 +250,7 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(30)).await;
         });
 
+        install_test_crypto_provider();
         let client =
             Client::with_params(ClientParams::new().sse_idle_timeout(Duration::from_millis(100)))
                 .unwrap();

@@ -372,6 +372,7 @@ mod cache_integration_tests {
         assert!(matches!(error, BmcError::CacheMiss));
     }
 
+    /// Verifies that a zero-capacity cache disables both ETag and response-body caching.
     #[tokio::test]
     async fn zero_capacity_disables_etag_and_body_caching() -> Result<(), Box<dyn Error>> {
         let mock_server = MockServer::start().await;
@@ -391,6 +392,7 @@ mod cache_integration_tests {
             .mount(&mock_server)
             .await;
 
+        install_test_crypto_provider();
         let client = Client::new()?;
         let bmc = HttpBmc::new(
             client,

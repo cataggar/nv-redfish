@@ -96,7 +96,9 @@ Common feature groups:
 - `bmc-http-native-tls`, `bmc-http-rustls-no-provider`: the same with the
   reqwest client using the platform's TLS library, or rustls with the
   application's `CryptoProvider`, without `ring`.
-- `http-extras`: enable optional HTTP client capabilities, including per-BMC operation concurrency limits; implies `bmc-http`.
+- `http-extras`: re-export `nv-redfish-bmc-http` from `nv_redfish::bmc_http`
+  with optional HTTP client capabilities, including per-BMC operation
+  concurrency limits, without enabling a reqwest TLS backend.
 - `resource-serialization`: enable Serde serialization for generated read and
   excerpt models.
 - `std-redfish`: enable a broad standard Redfish surface.

@@ -66,6 +66,7 @@ mod reqwest_client_tests {
         }
     }
 
+    /// Verifies that `GET` requests succeed and deserialize the returned resource.
     #[tokio::test]
     async fn test_get_request_success() {
         let mock_server = MockServer::start().await;
@@ -125,6 +126,7 @@ mod reqwest_client_tests {
         .max_retries(1)
         .delay(Duration::from_millis(10));
 
+        install_test_crypto_provider();
         let client = Client::with_params(ClientParams::new().retry(policy))?;
         let bmc = HttpBmc::new(
             client,
@@ -492,9 +494,11 @@ mod reqwest_client_tests {
         Ok(())
     }
 
+    /// Verifies that multipart update surfaces parameter serialization errors.
     #[tokio::test]
     async fn test_multipart_update_reports_encode_errors() -> Result<(), Box<dyn std::error::Error>>
     {
+        install_test_crypto_provider();
         let bmc = HttpBmc::new(
             Client::new()?,
             Url::parse("http://127.0.0.1")?,
@@ -683,6 +687,7 @@ mod reqwest_client_tests {
         Ok(())
     }
 
+    /// Verifies that `HttpPushUri` upload timeout applies only to the upload request.
     #[cfg(feature = "update-service-deprecated")]
     #[tokio::test]
     async fn http_push_uri_timeout_scoped() -> Result<(), Box<dyn std::error::Error>> {
@@ -717,6 +722,7 @@ mod reqwest_client_tests {
             .mount(&mock_server)
             .await;
 
+        install_test_crypto_provider();
         let client = Client::with_params(ClientParams::new().timeout(Duration::from_millis(50)))?;
         let bmc = HttpBmc::new(
             client,
@@ -953,6 +959,7 @@ mod reqwest_client_tests {
         Ok(())
     }
 
+    /// Verifies that `PATCH` can deserialize a typed response body without `@odata.id`.
     #[tokio::test]
     async fn test_http_patch_returns_typed_body_without_odata_id(
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -979,6 +986,7 @@ mod reqwest_client_tests {
             .mount(&mock_server)
             .await;
 
+        install_test_crypto_provider();
         let client = Client::new()?;
         let credentials = create_test_credentials();
         let custom_headers = http::HeaderMap::new();

@@ -76,6 +76,7 @@ nv-redfish-schema = { version = "0.1", path = "./schema" }
 toml = { version = "0.9", default-features = false }
 
 # Dev
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 tokio = "1.30"
 gungraun = "0.19.3"
 tokio-test = "0.4"
