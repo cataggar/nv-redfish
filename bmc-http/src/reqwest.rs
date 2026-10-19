@@ -221,6 +221,7 @@ impl From<DecodeError> for BmcError {
 }
 
 impl From<ModificationDecodeError> for BmcError {
+    /// Maps a [`ModificationDecodeError`] to the corresponding [`BmcError`] variant.
     fn from(error: ModificationDecodeError) -> Self {
         match error {
             ModificationDecodeError::InvalidResponse { url, status, text } => {
@@ -859,6 +860,8 @@ impl Client {
         }
     }
 
+    /// Read and deserialize a `GET` response, applying any [`Repair`] and
+    /// injecting the `ETag` header when present.
     async fn handle_response<T>(
         &self,
         response: reqwest::Response,
@@ -920,6 +923,8 @@ impl Client {
         Ok(decode_modification(&url, status, &headers, &body)?)
     }
 
+    /// Read a response to a session creation `POST`, extracting the
+    /// `X-Auth-Token`, `Location`, and session entity.
     async fn handle_session_response<T>(
         &self,
         response: reqwest::Response,
@@ -1035,6 +1040,7 @@ async fn successful_response(
     Ok((url, status, headers, body))
 }
 
+/// Extracts the `X-Auth-Token` header value when present and valid UTF-8.
 fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-auth-token")
@@ -1042,6 +1048,7 @@ fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Attaches the configured [`BmcCredentials`] to a request builder.
 fn auth_headers(
     request: reqwest::RequestBuilder,
     credentials: &BmcCredentials,

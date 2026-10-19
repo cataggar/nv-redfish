@@ -62,6 +62,7 @@ pub enum ModificationDecodeError {
 }
 
 impl fmt::Display for ModificationDecodeError {
+    /// Formats the decode error with its HTTP context or JSON path.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidResponse { url, status, text } => write!(
@@ -81,6 +82,7 @@ impl fmt::Display for ModificationDecodeError {
 }
 
 impl StdError for ModificationDecodeError {
+    /// Returns the underlying JSON or deserialization error, if any.
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::InvalidResponse { .. } => None,
@@ -91,6 +93,7 @@ impl StdError for ModificationDecodeError {
 }
 
 impl BmcError for ModificationDecodeError {
+    /// Classifies the error as an HTTP response error or a response parse error.
     fn error_class(&self) -> BmcErrorClass {
         match self {
             Self::InvalidResponse { status, .. } => BmcErrorClass::HttpResponse {
@@ -100,6 +103,7 @@ impl BmcError for ModificationDecodeError {
         }
     }
 
+    /// Extracts the inner [`DecodeError`] when the failure is a schema mismatch.
     fn into_decode_error(self) -> Result<DecodeError, Self> {
         match self {
             Self::Decode(error) => Ok(error),
@@ -432,6 +436,7 @@ pub fn location_from_headers(
     Ok(Some(odata_path_from_url(&resolved).into()))
 }
 
+/// Extracts the path and optional query string of `url` as an OData path.
 fn odata_path_from_url(url: &Url) -> String {
     let mut path_and_query = url.path().to_string();
 
@@ -445,6 +450,7 @@ fn odata_path_from_url(url: &Url) -> String {
     path_and_query
 }
 
+/// Extracts the `ETag` header from `headers` as an [`ODataETag`].
 pub fn etag_from_headers(headers: &HeaderMap) -> Option<ODataETag> {
     headers
         .get(header::ETAG)
@@ -467,6 +473,7 @@ fn task_from_body(body: &[u8]) -> Option<ODataId> {
         .map(|id| ODataId::from(id.to_string()))
 }
 
+/// Parses a numeric `Retry-After` header from `headers` as a delay in seconds.
 fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
     headers
         .get(header::RETRY_AFTER)
@@ -477,6 +484,7 @@ fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
+/// Sets `@odata.etag` on a JSON object `body` from an HTTP `ETag` header.
 pub fn inject_etag(etag: &ODataETag, body: &mut Value) {
     if let Some(obj) = body.as_object_mut() {
         let etag_value = Value::String(etag.to_string());
@@ -513,11 +521,13 @@ mod tests {
         odata_etag: Option<String>,
     }
 
+    /// Returns the default action URL used by modification decode tests.
     fn url() -> Url {
         Url::parse("https://bmc.example/redfish/v1/Systems/1/Actions/ComputerSystem.Reset")
             .expect("valid URL")
     }
 
+    /// Builds a [`HeaderMap`] from static header name/value pairs.
     fn headers(pairs: &[(header::HeaderName, &'static str)]) -> HeaderMap {
         pairs
             .iter()
@@ -525,6 +535,7 @@ mod tests {
             .collect()
     }
 
+    /// Decodes a JSON `body` with `status` and `headers` against the default test URL.
     fn decode<T: DeserializeOwned>(
         status: StatusCode,
         headers: &HeaderMap,
@@ -533,6 +544,7 @@ mod tests {
         decode_modification(&url(), status, headers, body.to_string().as_bytes())
     }
 
+    /// Verifies that [`success_code`] classifies standard and vendor success envelopes.
     #[test]
     fn success_messages_report_their_code() {
         for (body, code) in [
@@ -607,6 +619,7 @@ mod tests {
         }
     }
 
+    /// Verifies that critical messages and non-success status codes are rejected by [`success_code`].
     #[test]
     fn a_critical_message_or_an_error_code_is_not_a_success() {
         for body in [
@@ -643,6 +656,7 @@ mod tests {
         }
     }
 
+    /// Verifies that a `200 OK` success message decodes as [`ModificationResponse::Empty`].
     #[test]
     fn a_success_message_is_an_empty_response() -> Result<(), Box<dyn StdError>> {
         for body in [
@@ -656,6 +670,7 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that malformed JSON and non-success payloads return decode errors.
     #[test]
     fn a_body_that_is_neither_the_result_nor_a_success_message_fails() {
         for body in [
@@ -682,6 +697,7 @@ mod tests {
         assert!(matches!(error, ModificationDecodeError::Json(_)));
     }
 
+    /// Verifies that a success message accompanied by a `Location` header resolves to a reference.
     #[test]
     fn a_success_message_with_a_location_is_that_resource() -> Result<(), Box<dyn StdError>> {
         let location = headers(&[(header::LOCATION, "/redfish/v1/TaskService/Tasks/42")]);
@@ -699,6 +715,7 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies header-driven decoding for `204 No Content`, `202 Accepted`, and empty `201 Created`.
     #[test]
     fn statuses_without_a_result_decode_by_their_headers() -> Result<(), Box<dyn StdError>> {
         let response =
@@ -719,6 +736,29 @@ mod tests {
             "/redfish/v1/TaskService/Tasks/7"
         );
         assert_eq!(task.retry_after, Some(Duration::from_secs(5)));
+        assert_eq!(task.task, None);
+
+        let task_body = json!({
+            "@odata.id": "/redfish/v1/TaskService/Tasks/7",
+            "@odata.type": "#Task.v1_4_3.Task",
+        });
+        let ModificationResponse::Task(task_with_body) = decode_modification::<()>(
+            &url(),
+            StatusCode::ACCEPTED,
+            &accepted,
+            task_body.to_string().as_bytes(),
+        )?
+        else {
+            return Err("202 with Task body is a task".into());
+        };
+        assert_eq!(
+            task_with_body
+                .task
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("/redfish/v1/TaskService/Tasks/7")
+        );
 
         let error = decode_modification::<()>(&url(), StatusCode::ACCEPTED, &HeaderMap::new(), b"")
             .expect_err("202 without Location");
@@ -738,6 +778,7 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that unsupported `2xx` and non-`2xx` statuses return [`ModificationDecodeError::InvalidResponse`].
     #[test]
     fn unexpected_and_unsuccessful_statuses_are_invalid_responses() {
         let error =
@@ -767,6 +808,7 @@ mod tests {
         );
     }
 
+    /// Verifies that the HTTP `ETag` header is injected into a returned resource with `@odata.id`.
     #[test]
     fn the_etag_header_is_the_etag_of_a_returned_resource() -> Result<(), Box<dyn StdError>> {
         let etag = headers(&[(header::ETAG, "\"7\"")]);
@@ -783,6 +825,7 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies [`decode_poll`] handling of `202 Accepted` without `Location`, `204` with `Location`, and `200`.
     #[test]
     fn a_pending_poll_without_a_location_stays_at_the_polled_uri() -> Result<(), Box<dyn StdError>>
     {
@@ -815,6 +858,7 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies [`location_from_headers`] resolution and same-origin validation across URI forms.
     #[test]
     fn location_header_resolves_valid_and_rejects_invalid_references(
     ) -> Result<(), Box<dyn StdError>> {
