@@ -14,6 +14,20 @@
 // limitations under the License.
 
 //! Implementation of [`HttpClient`] trait using reqwest crate.
+//!
+//! The TLS of the client comes from a crate feature:
+//!
+//! - `reqwest` (default): rustls with its `ring` crypto provider and the
+//!   webpki root certificates.
+//! - `reqwest-native-tls`: the platform's TLS library: OpenSSL, SChannel or
+//!   Security.framework.
+//! - `reqwest-rustls-no-provider`: rustls with the webpki root certificates
+//!   and the process-default rustls `CryptoProvider`. The application installs
+//!   one before it builds a client; reqwest panics without one.
+//! - `reqwest-client` alone: no TLS, for plain HTTP.
+//!
+//! Only `reqwest` compiles in `ring`. With both rustls and native TLS built,
+//! [`ClientParams::use_rust_tls`] selects between them.
 
 use std::error::Error as StdErr;
 use std::fmt;
@@ -486,7 +500,8 @@ pub struct ClientParams {
     pub connect_timeout: Option<Duration>,
     /// User-Agent header value
     pub user_agent: Option<String>,
-    /// Whether to accept invalid TLS certificates
+    /// Whether to accept invalid TLS certificates. A client built without TLS
+    /// ignores it.
     pub accept_invalid_certs: bool,
 
     /// Maximum number of same-origin HTTP redirects to follow.
@@ -502,7 +517,10 @@ pub struct ClientParams {
     pub pool_max_idle_per_host: Option<usize>,
     /// List of default headers, added to every request
     pub default_headers: Option<HeaderMap>,
-    /// Forces use of rust TLS, enabled by default
+    /// Selects rustls over native TLS, enabled by default. It matters only
+    /// when the client is built with both, as when the `reqwest-native-tls`
+    /// feature is combined with `reqwest` or `reqwest-rustls-no-provider`; a
+    /// client built with one TLS backend uses that one.
     pub use_rust_tls: bool,
     /// Retry policy for received responses, `None` disables retries
     pub retry: Option<RetryPolicy>,
@@ -687,8 +705,14 @@ impl Client {
     pub fn with_params(params: ClientParams) -> Result<Self, reqwest::Error> {
         let mut builder = ReqwestClient::builder();
 
+        #[cfg(any(feature = "reqwest", feature = "reqwest-rustls-no-provider"))]
         if params.use_rust_tls {
             builder = builder.use_rustls_tls();
+        }
+
+        #[cfg(feature = "reqwest-native-tls")]
+        if !params.use_rust_tls {
+            builder = builder.use_native_tls();
         }
 
         if let Some(timeout) = params.timeout {
@@ -703,6 +727,11 @@ impl Client {
             builder = builder.user_agent(user_agent);
         }
 
+        #[cfg(any(
+            feature = "reqwest",
+            feature = "reqwest-native-tls",
+            feature = "reqwest-rustls-no-provider"
+        ))]
         if params.accept_invalid_certs {
             builder = builder.danger_accept_invalid_certs(true);
         }

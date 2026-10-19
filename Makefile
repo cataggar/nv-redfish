@@ -124,6 +124,17 @@ compile-only-feature-sets = computer-systems,processors,controls \
 
 check-one-feature = $(indent)cargo check -p nv-redfish --features $1$(new-line)
 
+# Builds of the reqwest client without ring, as package:features. Each must
+# build, and ring must not be in its dependency tree.
+no-ring-builds = nv-redfish-bmc-http:reqwest-client \
+             nv-redfish-bmc-http:reqwest-native-tls \
+             nv-redfish-bmc-http:reqwest-rustls-no-provider \
+             nv-redfish:bmc-http-native-tls \
+             nv-redfish:bmc-http-rustls-no-provider
+
+no-ring-args = -p $(word 1,$(subst :, ,$1)) --no-default-features --features $(word 2,$(subst :, ,$1))
+check-no-ring = $(indent)cargo check $(call no-ring-args,$1)$(new-line)$(indent)tree=$$(cargo tree $(call no-ring-args,$1) -e no-dev --prefix none) && ! printf '%s\n' "$$tree" | grep '^ring '$(new-line)
+
 define build-and-test
 	cargo fmt --all -- --check
 	cargo clippy $1
@@ -134,6 +145,8 @@ define build-and-test
 	$(foreach f,$(compile-only-feature-sets),$(call check-one-feature,$f))
 	cargo check -p nv-redfish
 	cargo check -p nv-redfish-bmc-http --no-default-features --features http-extras
+	$(foreach b,$(no-ring-builds),$(call check-no-ring,$b))
+	cargo test -p nv-redfish-bmc-http --no-default-features --features reqwest-native-tls --test reqwest_client_tests
 	cargo check -p nv-redfish-tests --tests
 	cargo check -p nv-redfish-bmc-mock
 	cargo build -p update-multipart --features update-service-deprecated

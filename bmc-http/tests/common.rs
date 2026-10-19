@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 #[allow(dead_code)]
 pub mod test_utils {
     use nv_redfish_bmc_http::reqwest::Client;

@@ -15,7 +15,7 @@
 
 mod common;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod tests {
     use crate::common::test_utils::*;
     use futures_util::StreamExt;

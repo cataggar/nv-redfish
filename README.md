@@ -25,7 +25,10 @@ your client needs, or use `std-redfish` for a broad standard Redfish build.
   - Provides `HttpBmc<C>`, `BmcCredentials`, ETag/cache handling, and the
     `HttpClient` trait.
   - The built-in reqwest client is behind the `reqwest` feature, enabled by
-    default for this crate.
+    default for this crate, which uses rustls with `ring`. The
+    `reqwest-native-tls` feature builds it with the platform's TLS library
+    instead, and `reqwest-rustls-no-provider` with rustls and a
+    `CryptoProvider` the application installs; neither compiles in `ring`.
   - Supports custom default headers and session-token credential updates, so
     callers can use either basic credentials or a Redfish `X-Auth-Token`.
   - Applies a `Repair` in its own decode. Its cache keeps each resource as
@@ -88,7 +91,11 @@ your client needs, or use `std-redfish` for a broad standard Redfish build.
 
 Common feature groups:
 
-- `bmc-http`: re-export `nv-redfish-bmc-http` from `nv_redfish::bmc_http`.
+- `bmc-http`: re-export `nv-redfish-bmc-http` from `nv_redfish::bmc_http`, with
+  its reqwest client using rustls and `ring`.
+- `bmc-http-native-tls`, `bmc-http-rustls-no-provider`: the same with the
+  reqwest client using the platform's TLS library, or rustls with the
+  application's `CryptoProvider`, without `ring`.
 - `http-extras`: enable optional HTTP client capabilities, including per-BMC operation concurrency limits; implies `bmc-http`.
 - `resource-serialization`: enable Serde serialization for generated read and
   excerpt models.

@@ -198,7 +198,11 @@ pub use nv_redfish_core as core;
 #[doc(inline)]
 pub use nv_redfish_quirks as quirks;
 
-#[cfg(feature = "bmc-http")]
+#[cfg(any(
+    feature = "bmc-http",
+    feature = "bmc-http-native-tls",
+    feature = "bmc-http-rustls-no-provider"
+))]
 #[doc(inline)]
 pub use nv_redfish_bmc_http as bmc_http;
 
