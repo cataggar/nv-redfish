@@ -27,7 +27,13 @@
 //! - `reqwest-client` alone: no TLS, for plain HTTP.
 //!
 //! Only `reqwest` compiles in `ring`. With both rustls and native TLS built,
-//! [`ClientParams::use_rust_tls`] selects between them.
+//! [`ClientParams::use_rust_tls`] (which defaults to `true`) selects between
+//! them. In particular, enabling both `reqwest-native-tls` and
+//! `reqwest-rustls-no-provider` without `reqwest` still selects rustls by
+//! default, so [`Client::new`] (or [`Client::with_params`] with
+//! `use_rust_tls: true`) panics unless a process-default `CryptoProvider` is
+//! installed; set `use_rust_tls: false` in [`ClientParams`] to use native TLS
+//! without installing one.
 
 use std::error::Error as StdErr;
 use std::fmt;
@@ -522,6 +528,11 @@ pub struct ClientParams {
     /// when the client is built with both, as when the `reqwest-native-tls`
     /// feature is combined with `reqwest` or `reqwest-rustls-no-provider`; a
     /// client built with one TLS backend uses that one.
+    ///
+    /// Because this defaults to `true`, enabling both `reqwest-native-tls`
+    /// and `reqwest-rustls-no-provider` (without `reqwest`) still selects
+    /// rustls by default and requires a process-default `CryptoProvider`
+    /// unless `use_rust_tls` is set to `false`.
     pub use_rust_tls: bool,
     /// Retry policy for received responses, `None` disables retries
     pub retry: Option<RetryPolicy>,
@@ -693,6 +704,13 @@ impl Client {
     ///
     /// Internally it builds [`reqwest::ClientBuilder::build`]. This function
     /// transparently passes errors of this call to caller.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `reqwest-rustls-no-provider` is enabled without `reqwest`
+    /// (even when `reqwest-native-tls` is also enabled, because
+    /// [`ClientParams::use_rust_tls`] defaults to `true`) and no
+    /// process-default `rustls::crypto::CryptoProvider` has been installed.
     pub fn new() -> Result<Self, ReqwestError> {
         Self::with_params(ClientParams::default())
     }
@@ -703,6 +721,12 @@ impl Client {
     ///
     /// Internally it builds [`reqwest::ClientBuilder::build`]. This function
     /// transparently passes errors of this call to caller.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `params.use_rust_tls` is `true`, `reqwest-rustls-no-provider`
+    /// is enabled without `reqwest`, and no process-default
+    /// `rustls::crypto::CryptoProvider` has been installed.
     pub fn with_params(params: ClientParams) -> Result<Self, reqwest::Error> {
         let mut builder = ReqwestClient::builder();
 

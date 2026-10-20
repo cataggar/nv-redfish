@@ -23,7 +23,6 @@ mod reqwest_client_tests {
 
     use futures_util::io::Cursor;
     use nv_redfish_bmc_http::reqwest::BmcError;
-    use nv_redfish_bmc_http::reqwest::Client;
     use nv_redfish_bmc_http::reqwest::ClientParams;
     use nv_redfish_bmc_http::reqwest::RetryPolicy;
     use nv_redfish_bmc_http::BmcCredentials;
@@ -126,8 +125,7 @@ mod reqwest_client_tests {
         .max_retries(1)
         .delay(Duration::from_millis(10));
 
-        install_test_crypto_provider();
-        let client = Client::with_params(ClientParams::new().retry(policy))?;
+        let client = test_client(ClientParams::new().retry(policy));
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri())?,
@@ -498,9 +496,8 @@ mod reqwest_client_tests {
     #[tokio::test]
     async fn test_multipart_update_reports_encode_errors() -> Result<(), Box<dyn std::error::Error>>
     {
-        install_test_crypto_provider();
         let bmc = HttpBmc::new(
-            Client::new()?,
+            test_client(ClientParams::new()),
             Url::parse("http://127.0.0.1")?,
             create_test_credentials(),
             CacheSettings::default(),
@@ -722,8 +719,7 @@ mod reqwest_client_tests {
             .mount(&mock_server)
             .await;
 
-        install_test_crypto_provider();
-        let client = Client::with_params(ClientParams::new().timeout(Duration::from_millis(50)))?;
+        let client = test_client(ClientParams::new().timeout(Duration::from_millis(50)));
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri())?,
@@ -986,8 +982,7 @@ mod reqwest_client_tests {
             .mount(&mock_server)
             .await;
 
-        install_test_crypto_provider();
-        let client = Client::new()?;
+        let client = test_client(ClientParams::new());
         let credentials = create_test_credentials();
         let custom_headers = http::HeaderMap::new();
         let response = client

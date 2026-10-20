@@ -17,6 +17,7 @@
 #[allow(dead_code)]
 pub mod test_utils {
     use nv_redfish_bmc_http::reqwest::Client;
+    use nv_redfish_bmc_http::reqwest::ClientParams;
     use nv_redfish_bmc_http::BmcCredentials;
     use nv_redfish_bmc_http::CacheSettings;
     use nv_redfish_bmc_http::HttpBmc;
@@ -107,14 +108,19 @@ pub mod test_utils {
 
     /// Creates test BMC credentials with a default username and password.
     pub fn create_test_credentials() -> BmcCredentials {
-        install_test_crypto_provider();
         BmcCredentials::username_password("root".to_string(), Some("password".to_string()))
+    }
+
+    /// Builds a test [`Client`] from `params`, installing the test
+    /// [`rustls::crypto::CryptoProvider`] first when needed.
+    pub fn test_client(params: ClientParams) -> Client {
+        install_test_crypto_provider();
+        Client::with_params(params).unwrap()
     }
 
     /// Creates a test [`HttpBmc`] connected to `mock_server`.
     pub fn create_test_bmc(mock_server: &MockServer) -> HttpBmc<Client> {
-        install_test_crypto_provider();
-        let client = Client::new().unwrap();
+        let client = test_client(ClientParams::new());
         let credentials = create_test_credentials();
         HttpBmc::new(
             client,
@@ -129,8 +135,7 @@ pub mod test_utils {
         mock_server: &MockServer,
         credentials: BmcCredentials,
     ) -> HttpBmc<Client> {
-        install_test_crypto_provider();
-        let client = Client::new().unwrap();
+        let client = test_client(ClientParams::new());
         HttpBmc::new(
             client,
             Url::parse(&mock_server.uri()).unwrap(),
@@ -144,8 +149,7 @@ pub mod test_utils {
         mock_server: &MockServer,
         custom_headers: http::HeaderMap,
     ) -> HttpBmc<Client> {
-        install_test_crypto_provider();
-        let client = Client::new().unwrap();
+        let client = test_client(ClientParams::new());
         let credentials = create_test_credentials();
         HttpBmc::with_custom_headers(
             client,
@@ -161,7 +165,7 @@ pub mod test_utils {
     /// provider. All integration tests connect to plain-HTTP mock servers, so
     /// the provider only needs to satisfy `reqwest::ClientBuilder::build`.
     #[cfg(all(feature = "reqwest-rustls-no-provider", not(feature = "reqwest")))]
-    pub fn install_test_crypto_provider() {
+    fn install_test_crypto_provider() {
         use std::sync::Arc;
 
         use rustls::crypto::cipher::AeadKey;
@@ -353,7 +357,7 @@ pub mod test_utils {
 
     /// No-op when a TLS provider is already configured by the active feature set.
     #[cfg(not(all(feature = "reqwest-rustls-no-provider", not(feature = "reqwest"))))]
-    pub const fn install_test_crypto_provider() {}
+    const fn install_test_crypto_provider() {}
 
     pub mod names {
         pub const TEST_CHASSIS: &str = "Test Chassis";

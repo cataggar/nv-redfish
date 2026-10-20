@@ -38,8 +38,10 @@ bmc-http-rustls-no-provider = [
     "nv-redfish-bmc-http/reqwest-rustls-no-provider",
 ]
 # Re-exports nv-redfish-bmc-http as `bmc_http` with optional HTTP client
-# capabilities (such as per-BMC operation concurrency limits) without
-# selecting a reqwest TLS backend.
+# capabilities (such as per-BMC operation concurrency limits). Does not enable
+# `bmc-http` or a `reqwest` client; combine with `bmc-http`,
+# `bmc-http-native-tls`, or `bmc-http-rustls-no-provider` when using
+# `bmc_http::reqwest`.
 http-extras = [
     "dep:nv-redfish-bmc-http",
     "nv-redfish-bmc-http/http-extras",

@@ -22,7 +22,7 @@ mod cache_integration_tests {
     use crate::common::test_utils::*;
 
     use nv_redfish_bmc_http::{
-        reqwest::{BmcError, Client},
+        reqwest::{BmcError, ClientParams},
         CacheSettings, HttpBmc,
     };
     use nv_redfish_core::query::{ExpandQuery, FilterQuery};
@@ -392,8 +392,7 @@ mod cache_integration_tests {
             .mount(&mock_server)
             .await;
 
-        install_test_crypto_provider();
-        let client = Client::new()?;
+        let client = test_client(ClientParams::new());
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri())?,
