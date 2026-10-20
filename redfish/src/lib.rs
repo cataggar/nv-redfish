@@ -37,6 +37,17 @@
 //!   lightweight as possible.
 //!
 //! Features
+//! - `bmc-http`, `bmc-http-native-tls`, and `bmc-http-rustls-no-provider`
+//!   re-export `nv-redfish-bmc-http` as `bmc_http` with its built-in `reqwest`
+//!   client. Note that enabling both `bmc-http-native-tls` and
+//!   `bmc-http-rustls-no-provider` (without `bmc-http`) still selects rustls by
+//!   default (`ClientParams::use_rust_tls` defaults to `true`), so
+//!   `bmc_http::reqwest::Client::new()` panics unless a process-default
+//!   `CryptoProvider` is installed.
+//! - `http-extras` re-exports `nv-redfish-bmc-http` with optional HTTP client
+//!   capabilities (such as `ConcurrencyLimitedBmc`) without enabling `bmc-http`
+//!   or the `reqwest` client; combine it with one of the `bmc-http*` features
+//!   above when using `bmc_http::reqwest`.
 //! - Service feature flags such as `accounts`, `session-service`,
 //!   `update-service`, and others enable typed wrappers for specific Redfish
 //!   services and resources.
@@ -198,7 +209,12 @@ pub use nv_redfish_core as core;
 #[doc(inline)]
 pub use nv_redfish_quirks as quirks;
 
-#[cfg(feature = "bmc-http")]
+#[cfg(any(
+    feature = "bmc-http",
+    feature = "bmc-http-native-tls",
+    feature = "bmc-http-rustls-no-provider",
+    feature = "http-extras"
+))]
 #[doc(inline)]
 pub use nv_redfish_bmc_http as bmc_http;
 

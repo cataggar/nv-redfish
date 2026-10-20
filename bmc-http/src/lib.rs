@@ -43,10 +43,10 @@ pub mod credentials;
 
 #[cfg(feature = "http-extras")]
 mod concurrency;
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod schema;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 pub mod reqwest;
 
 use std::error::Error as StdError;

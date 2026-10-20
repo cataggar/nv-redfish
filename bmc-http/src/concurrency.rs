@@ -37,7 +37,7 @@ use tokio::sync::SemaphorePermit;
 /// # Examples
 ///
 /// ```rust,no_run
-/// # #[cfg(feature = "reqwest")]
+/// # #[cfg(feature = "reqwest-client")]
 /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// use std::num::NonZeroUsize;
 ///

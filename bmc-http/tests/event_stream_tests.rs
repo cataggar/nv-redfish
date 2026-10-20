@@ -15,7 +15,7 @@
 
 mod common;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod tests {
     use crate::common::test_utils::*;
     use futures_util::StreamExt;
@@ -160,9 +160,10 @@ mod tests {
         assert!(stream.next().await.is_none());
     }
 
+    /// Verifies that the SSE stream aborts when an event exceeds `sse_max_event_bytes`.
     #[tokio::test]
     async fn sse_aborts_when_event_exceeds_byte_limit() {
-        use nv_redfish_bmc_http::reqwest::{Client, ClientParams};
+        use nv_redfish_bmc_http::reqwest::ClientParams;
         use nv_redfish_bmc_http::{CacheSettings, HttpBmc};
         use url::Url;
 
@@ -184,7 +185,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let client = Client::with_params(ClientParams::new().sse_max_event_bytes(16)).unwrap();
+        let client = test_client(ClientParams::new().sse_max_event_bytes(16));
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri()).unwrap(),
@@ -205,9 +206,10 @@ mod tests {
         );
     }
 
+    /// Verifies that the SSE stream aborts when no frame arrives within `sse_idle_timeout`.
     #[tokio::test]
     async fn sse_aborts_on_idle_timeout() {
-        use nv_redfish_bmc_http::reqwest::{Client, ClientParams};
+        use nv_redfish_bmc_http::reqwest::ClientParams;
         use nv_redfish_bmc_http::{CacheSettings, HttpBmc};
         use std::time::Duration;
         use tokio::io::AsyncReadExt as _;
@@ -247,9 +249,7 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(30)).await;
         });
 
-        let client =
-            Client::with_params(ClientParams::new().sse_idle_timeout(Duration::from_millis(100)))
-                .unwrap();
+        let client = test_client(ClientParams::new().sse_idle_timeout(Duration::from_millis(100)));
         let bmc = HttpBmc::new(
             client,
             Url::parse(&format!("http://{addr}")).unwrap(),

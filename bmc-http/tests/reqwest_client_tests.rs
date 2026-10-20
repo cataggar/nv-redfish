@@ -15,7 +15,7 @@
 
 mod common;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod reqwest_client_tests {
     #[cfg(feature = "http-extras")]
     use std::num::NonZeroUsize;
@@ -23,10 +23,8 @@ mod reqwest_client_tests {
 
     use futures_util::io::Cursor;
     use nv_redfish_bmc_http::reqwest::BmcError;
-    use nv_redfish_bmc_http::reqwest::Client;
     use nv_redfish_bmc_http::reqwest::ClientParams;
     use nv_redfish_bmc_http::reqwest::RetryPolicy;
-    #[cfg(any(feature = "http-extras", feature = "update-service-deprecated"))]
     use nv_redfish_bmc_http::BmcCredentials;
     use nv_redfish_bmc_http::CacheSettings;
     use nv_redfish_bmc_http::HttpBmc;
@@ -67,6 +65,7 @@ mod reqwest_client_tests {
         }
     }
 
+    /// Verifies that `GET` requests succeed and deserialize the returned resource.
     #[tokio::test]
     async fn test_get_request_success() {
         let mock_server = MockServer::start().await;
@@ -126,7 +125,7 @@ mod reqwest_client_tests {
         .max_retries(1)
         .delay(Duration::from_millis(10));
 
-        let client = Client::with_params(ClientParams::new().retry(policy))?;
+        let client = test_client(ClientParams::new().retry(policy));
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri())?,
@@ -493,11 +492,12 @@ mod reqwest_client_tests {
         Ok(())
     }
 
+    /// Verifies that multipart update surfaces parameter serialization errors.
     #[tokio::test]
     async fn test_multipart_update_reports_encode_errors() -> Result<(), Box<dyn std::error::Error>>
     {
         let bmc = HttpBmc::new(
-            Client::new()?,
+            test_client(ClientParams::new()),
             Url::parse("http://127.0.0.1")?,
             create_test_credentials(),
             CacheSettings::default(),
@@ -684,6 +684,7 @@ mod reqwest_client_tests {
         Ok(())
     }
 
+    /// Verifies that `HttpPushUri` upload timeout applies only to the upload request.
     #[cfg(feature = "update-service-deprecated")]
     #[tokio::test]
     async fn http_push_uri_timeout_scoped() -> Result<(), Box<dyn std::error::Error>> {
@@ -718,7 +719,7 @@ mod reqwest_client_tests {
             .mount(&mock_server)
             .await;
 
-        let client = Client::with_params(ClientParams::new().timeout(Duration::from_millis(50)))?;
+        let client = test_client(ClientParams::new().timeout(Duration::from_millis(50)));
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri())?,
@@ -954,6 +955,7 @@ mod reqwest_client_tests {
         Ok(())
     }
 
+    /// Verifies that `PATCH` can deserialize a typed response body without `@odata.id`.
     #[tokio::test]
     async fn test_http_patch_returns_typed_body_without_odata_id(
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -980,7 +982,7 @@ mod reqwest_client_tests {
             .mount(&mock_server)
             .await;
 
-        let client = Client::new()?;
+        let client = test_client(ClientParams::new());
         let credentials = create_test_credentials();
         let custom_headers = http::HeaderMap::new();
         let response = client

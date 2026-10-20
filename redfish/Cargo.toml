@@ -23,9 +23,27 @@ all-features = true
 [features]
 default = []
 
-bmc-http = [ "dep:nv-redfish-bmc-http" ]
+# Re-exports nv-redfish-bmc-http as `bmc_http`, with its reqwest client
+# using rustls and ring.
+bmc-http = [ "dep:nv-redfish-bmc-http", "nv-redfish-bmc-http/reqwest" ]
+# As `bmc-http`, with the reqwest client using the platform's TLS library.
+bmc-http-native-tls = [
+    "dep:nv-redfish-bmc-http",
+    "nv-redfish-bmc-http/reqwest-native-tls",
+]
+# As `bmc-http`, with the reqwest client using rustls and the
+# application's rustls CryptoProvider instead of ring.
+bmc-http-rustls-no-provider = [
+    "dep:nv-redfish-bmc-http",
+    "nv-redfish-bmc-http/reqwest-rustls-no-provider",
+]
+# Re-exports nv-redfish-bmc-http as `bmc_http` with optional HTTP client
+# capabilities (such as per-BMC operation concurrency limits). Does not enable
+# `bmc-http` or a `reqwest` client; combine with `bmc-http`,
+# `bmc-http-native-tls`, or `bmc-http-rustls-no-provider` when using
+# `bmc_http::reqwest`.
 http-extras = [
-    "bmc-http",
+    "dep:nv-redfish-bmc-http",
     "nv-redfish-bmc-http/http-extras",
 ]
 resource-serialization = []

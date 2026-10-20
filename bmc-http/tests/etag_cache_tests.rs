@@ -15,14 +15,14 @@
 
 mod common;
 
-#[cfg(feature = "reqwest")]
+#[cfg(feature = "reqwest-client")]
 mod cache_integration_tests {
     use std::{error::Error, sync::Arc};
 
     use crate::common::test_utils::*;
 
     use nv_redfish_bmc_http::{
-        reqwest::{BmcError, Client},
+        reqwest::{BmcError, ClientParams},
         CacheSettings, HttpBmc,
     };
     use nv_redfish_core::query::{ExpandQuery, FilterQuery};
@@ -372,6 +372,7 @@ mod cache_integration_tests {
         assert!(matches!(error, BmcError::CacheMiss));
     }
 
+    /// Verifies that a zero-capacity cache disables both ETag and response-body caching.
     #[tokio::test]
     async fn zero_capacity_disables_etag_and_body_caching() -> Result<(), Box<dyn Error>> {
         let mock_server = MockServer::start().await;
@@ -391,7 +392,7 @@ mod cache_integration_tests {
             .mount(&mock_server)
             .await;
 
-        let client = Client::new()?;
+        let client = test_client(ClientParams::new());
         let bmc = HttpBmc::new(
             client,
             Url::parse(&mock_server.uri())?,
