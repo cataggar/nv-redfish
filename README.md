@@ -33,6 +33,11 @@ your client needs, or use `std-redfish` for a broad standard Redfish build.
     `reqwest-native-tls` and `reqwest-rustls-no-provider` (without `reqwest`)
     causes `Client::new()` to panic unless a `CryptoProvider` is installed (or
     `use_rust_tls` is set to `false` via `Client::with_params`).
+  - Provides `decode_modification` and `decode_poll`, so an `HttpClient` over
+    another HTTP library decodes the responses to modifications and polls as
+    the reqwest client does, success messages included. `success_code` and
+    `strict_success_code` tell what a success message reports, for a caller
+    that must not count `NoOperation` or a success with warnings.
   - Supports custom default headers and session-token credential updates, so
     callers can use either basic credentials or a Redfish `X-Auth-Token`.
   - Applies a `Repair` in its own decode. Its cache keeps each resource as

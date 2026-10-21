@@ -41,13 +41,17 @@ use std::future::ready;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::schema::redfish::message::Message;
-use crate::schema::redfish::redfish_error::RedfishErrorContents;
+use crate::decode_modification;
+use crate::decode_poll;
+use crate::response::etag_from_headers;
+use crate::response::inject_etag;
+use crate::response::location_from_headers;
 use crate::BmcCredentials;
 use crate::CacheableError;
 use crate::HttpClient;
 #[cfg(feature = "update-service-deprecated")]
 use crate::HttpPushUriUpdateRequest;
+use crate::ModificationDecodeError;
 use crate::MultipartUpdateRequest;
 use crate::RejectedUriReferenceError;
 use crate::RequestError;
@@ -59,16 +63,13 @@ use futures_util::StreamExt as _;
 use futures_util::TryStreamExt as _;
 use http::header;
 use http::HeaderMap;
-use nv_redfish_core::odata::ODataType;
 use nv_redfish_core::ActionError;
-use nv_redfish_core::AsyncTask;
 use nv_redfish_core::BmcErrorClass;
 use nv_redfish_core::BoxTryStream;
 use nv_redfish_core::DataStream;
 use nv_redfish_core::DecodeError;
 use nv_redfish_core::ModificationResponse;
 use nv_redfish_core::ODataETag;
-use nv_redfish_core::ODataId;
 use nv_redfish_core::OemMultipartPart;
 use nv_redfish_core::Repair;
 use nv_redfish_core::SessionCreateResponse;
@@ -216,6 +217,19 @@ impl StdErr for BmcError {
 impl From<DecodeError> for BmcError {
     fn from(error: DecodeError) -> Self {
         Self::JsonError(error)
+    }
+}
+
+impl From<ModificationDecodeError> for BmcError {
+    /// Maps a [`ModificationDecodeError`] to the corresponding [`BmcError`] variant.
+    fn from(error: ModificationDecodeError) -> Self {
+        match error {
+            ModificationDecodeError::InvalidResponse { url, status, text } => {
+                Self::InvalidResponse { url, status, text }
+            }
+            ModificationDecodeError::Json(error) => Self::DecodeError(error),
+            ModificationDecodeError::Decode(error) => Self::JsonError(error),
+        }
     }
 }
 
@@ -846,6 +860,8 @@ impl Client {
         }
     }
 
+    /// Read and deserialize a `GET` response, applying any [`Repair`] and
+    /// injecting the `ETag` header when present.
     async fn handle_response<T>(
         &self,
         response: reqwest::Response,
@@ -882,11 +898,8 @@ impl Client {
         serde_path_to_error::deserialize(value).map_err(BmcError::JsonError)
     }
 
-    /// Read a response to polling an asynchronous operation.
-    ///
-    /// Pending responses often omit `Location`, which keeps the polled URI.
-    /// Finished responses are read like modification responses, and a `204`
-    /// naming a `Location` is read like an empty `200` with one.
+    /// Read a response to polling an asynchronous operation; see
+    /// [`decode_poll`].
     async fn handle_poll_response<T>(
         &self,
         response: reqwest::Response,
@@ -894,37 +907,11 @@ impl Client {
     where
         T: DeserializeOwned + Send + Sync,
     {
-        let status = response.status();
-        let url = response.url();
-        let headers = response.headers();
-        match status {
-            reqwest::StatusCode::ACCEPTED => {
-                let location = location_from_headers(headers, url, status)?
-                    .unwrap_or_else(|| odata_path_from_url(url).into());
-                let retry_after = retry_after_from_headers(headers);
-                let task = response
-                    .bytes()
-                    .await
-                    .ok()
-                    .and_then(|body| task_from_body(&body));
-                Ok(ModificationResponse::Task(AsyncTask {
-                    location: location.into(),
-                    retry_after,
-                    task,
-                }))
-            }
-            reqwest::StatusCode::NO_CONTENT => location_from_headers(headers, url, status)?.map_or(
-                Ok(ModificationResponse::Empty),
-                |location| {
-                    serde_path_to_error::deserialize(serde_json::json!({ "@odata.id": location }))
-                        .map(ModificationResponse::Entity)
-                        .map_err(BmcError::JsonError)
-                },
-            ),
-            _ => self.handle_modification_response(response).await,
-        }
+        let (url, status, headers, body) = successful_response(response).await?;
+        Ok(decode_poll(&url, status, &headers, &body)?)
     }
 
+    /// Read a response to a modification; see [`decode_modification`].
     async fn handle_modification_response<T>(
         &self,
         response: reqwest::Response,
@@ -932,109 +919,12 @@ impl Client {
     where
         T: DeserializeOwned + Send + Sync,
     {
-        let status = response.status();
-        let url = response.url().clone();
-        let headers = response.headers().clone();
-        if !status.is_success() {
-            return Err(BmcError::InvalidResponse {
-                url,
-                status,
-                text: response.text().await.unwrap_or_else(|_| "<no data>".into()),
-            });
-        }
-
-        let etag = etag_from_headers(&headers);
-
-        // Resolve the header once, but defer propagating its error until a
-        // status branch actually uses Location. A malformed, irrelevant
-        // Location must not turn a valid 204 or entity-bearing 200/201 into an
-        // error.
-        let location = location_from_headers(&headers, &url, status);
-
-        match status {
-            reqwest::StatusCode::NO_CONTENT => Ok(ModificationResponse::Empty),
-            reqwest::StatusCode::ACCEPTED => {
-                let Some(task_location) = location? else {
-                    return Err(BmcError::InvalidResponse {
-                        url,
-                        status,
-                        text: String::from("202 Accepted without Location header"),
-                    });
-                };
-
-                let task = response
-                    .bytes()
-                    .await
-                    .ok()
-                    .and_then(|body| task_from_body(&body));
-                Ok(ModificationResponse::Task(AsyncTask {
-                    location: task_location.into(),
-                    retry_after: retry_after_from_headers(&headers),
-                    task,
-                }))
-            }
-            reqwest::StatusCode::OK | reqwest::StatusCode::CREATED => {
-                let bytes = response.bytes().await.map_err(BmcError::ReqwestError)?;
-                if !bytes.is_empty() {
-                    let value: serde_json::Value =
-                        serde_json::from_slice(&bytes).map_err(BmcError::DecodeError)?;
-                    let mut value = value;
-
-                    if value.get("@odata.id").is_some() {
-                        if let Some(etag) = etag {
-                            inject_etag(&etag, &mut value);
-                        }
-                    }
-
-                    // Non-empty 200/201 bodies are typed responses selected by the caller.
-                    //
-                    // - These bodies are not required to be Redfish resources with @odata.id.
-                    //
-                    // - DSP0266 POST actions with no response body may still return "an error
-                    //   response, with a message that indicates success".
-                    return match serde_path_to_error::deserialize(&value) {
-                        // Non-empty 200/201 body matched the caller-selected type.
-                        Ok(entity) => Ok(ModificationResponse::Entity(entity)),
-                        Err(err) => {
-                            if is_redfish_success_response(&value) {
-                                // A success envelope is not the requested
-                                // representation. Preserve an accompanying
-                                // resource Location in the same way as an
-                                // empty 200/201 response.
-                                if let Some(location) = location? {
-                                    let value = serde_json::json!({ "@odata.id": location });
-                                    return Ok(serde_path_to_error::deserialize(value)
-                                        .map_or(ModificationResponse::Empty, |entity| {
-                                            ModificationResponse::Entity(entity)
-                                        }));
-                                }
-                                Ok(ModificationResponse::Empty)
-                            } else {
-                                // The response was successful JSON, but it did
-                                // not match the caller-selected response type.
-                                Err(BmcError::JsonError(err))
-                            }
-                        }
-                    };
-                }
-
-                if let Some(location) = location? {
-                    let value = serde_json::json!({ "@odata.id": location });
-                    return serde_path_to_error::deserialize(value)
-                        .map(ModificationResponse::Entity)
-                        .map_err(BmcError::JsonError);
-                }
-
-                Ok(ModificationResponse::Empty)
-            }
-            _ => Err(BmcError::InvalidResponse {
-                url,
-                status,
-                text: format!("Unexpected successful status code: {status}"),
-            }),
-        }
+        let (url, status, headers, body) = successful_response(response).await?;
+        Ok(decode_modification(&url, status, &headers, &body)?)
     }
 
+    /// Read a response to a session creation `POST`, extracting the
+    /// `X-Auth-Token`, `Location`, and session entity.
     async fn handle_session_response<T>(
         &self,
         response: reqwest::Response,
@@ -1131,71 +1021,30 @@ fn same_origin_redirect_policy(redirect_policy: RedirectPolicy) -> RedirectPolic
     })
 }
 
-/// Resolve a Redfish `Location` header into a same-origin path and query.
-///
-/// HTTP defines `Location` as a URI reference, so values may be absolute,
-/// root-relative, path-relative, or query-only. Resolution must use the final
-/// response URL; treating a relative value as a path rooted at the configured
-/// BMC endpoint can target a different resource. The returned `ODataId` keeps
-/// only path and query because fragments are not sent in subsequent HTTP
-/// requests and transport always uses the configured BMC origin.
-fn location_from_headers(
-    headers: &HeaderMap,
-    response_url: &Url,
-    status: reqwest::StatusCode,
-) -> Result<Option<ODataId>, BmcError> {
-    let invalid_response = |text: &'static str| BmcError::InvalidResponse {
-        url: response_url.clone(),
-        status,
-        text: text.to_string(),
-    };
-
-    let Some(value) = headers.get(header::LOCATION) else {
-        return Ok(None);
-    };
-
-    let raw = value
-        .to_str()
-        .map_err(|_| invalid_response("Location header is not valid text"))?;
-
-    let raw = raw.trim();
-
-    // Joining either value would resolve back to the response resource, which
-    // cannot identify a newly created session or asynchronous task monitor.
-    if raw.is_empty() || raw.starts_with('#') {
-        return Err(invalid_response(
-            "Location header does not identify a resource",
-        ));
+/// The parts of a successful response, with its whole body. An unsuccessful
+/// one is an error with its body as text.
+async fn successful_response(
+    response: reqwest::Response,
+) -> Result<(Url, reqwest::StatusCode, HeaderMap, Bytes), BmcError> {
+    let status = response.status();
+    let url = response.url().clone();
+    if !status.is_success() {
+        return Err(BmcError::InvalidResponse {
+            url,
+            status,
+            text: response.text().await.unwrap_or_else(|_| "<no data>".into()),
+        });
     }
-
-    let resolved = response_url
-        .join(raw)
-        .map_err(|_| invalid_response("Location header is not a valid URI reference"))?;
-
-    // Redfish follow-up requests carry BMC credentials. Reject another origin
-    // before reducing the URL to an OData path and losing that distinction.
-    if resolved.origin() != response_url.origin() {
-        return Err(invalid_response(
-            "Location header resolves to a different origin",
-        ));
-    }
-
-    Ok(Some(odata_path_from_url(&resolved).into()))
+    let headers = response.headers().clone();
+    let body = match status {
+        reqwest::StatusCode::NO_CONTENT => Bytes::new(),
+        reqwest::StatusCode::ACCEPTED => response.bytes().await.unwrap_or_default(),
+        _ => response.bytes().await.map_err(BmcError::ReqwestError)?,
+    };
+    Ok((url, status, headers, body))
 }
 
-fn odata_path_from_url(url: &Url) -> String {
-    let mut path_and_query = url.path().to_string();
-
-    // Preserve the query separately from the path so later polling or deletion
-    // sends it as a query instead of percent-encoded path text.
-    if let Some(query) = url.query() {
-        path_and_query.push('?');
-        path_and_query.push_str(query);
-    }
-
-    path_and_query
-}
-
+/// Extracts the `X-Auth-Token` header value when present and valid UTF-8.
 fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-auth-token")
@@ -1203,81 +1052,7 @@ fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
-fn etag_from_headers(headers: &HeaderMap) -> Option<ODataETag> {
-    headers
-        .get(header::ETAG)
-        .and_then(|value| value.to_str().ok())
-        .map(|v| v.to_string().into())
-}
-
-/// The `Task` resource a `202 Accepted` body represents, if the body is one.
-fn task_from_body(body: &[u8]) -> Option<ODataId> {
-    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let is_task = ODataType::parse_from(&value).is_some_and(|odata_type| {
-        odata_type.namespace.first() == Some(&"Task") && odata_type.type_name == "Task"
-    });
-    if !is_task {
-        return None;
-    }
-    value
-        .get("@odata.id")
-        .and_then(serde_json::Value::as_str)
-        .map(|id| ODataId::from(id.to_string()))
-}
-
-fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
-    headers
-        .get(header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        // RFC 9110 defines the numeric Retry-After form as delay-seconds.
-        // This helper handles that form and leaves HTTP-date support out of scope.
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-}
-
-fn inject_etag(etag: &ODataETag, body: &mut serde_json::Value) {
-    if let Some(obj) = body.as_object_mut() {
-        let etag_value = serde_json::Value::String(etag.to_string());
-
-        // Handles both absent and null values
-        obj.entry("@odata.etag")
-            .and_modify(|v| *v = etag_value.clone())
-            .or_insert(etag_value);
-    }
-}
-
-/// DSP0266 7.11, Table 10 allows actions without response bodies to return
-/// an error-shaped success body. Only that body should become Empty.
-#[inline]
-fn is_redfish_success_response(value: &serde_json::Value) -> bool {
-    #[derive(serde::Deserialize)]
-    struct ExtendedInfoEnvelope {
-        #[serde(rename = "@Message.ExtendedInfo")]
-        _extended_info: Vec<Message>,
-    }
-
-    /// Supermicro reports the status under `Success` rather than `error`.
-    #[derive(serde::Deserialize)]
-    struct StatusEnvelope {
-        #[serde(rename = "error", alias = "Success")]
-        status: RedfishErrorContents,
-    }
-
-    // If we recieved extended info, this means we got a success response
-    if <ExtendedInfoEnvelope as serde::Deserialize>::deserialize(value).is_ok() {
-        return true;
-    }
-
-    let Ok(envelope) = <StatusEnvelope as serde::Deserialize>::deserialize(value) else {
-        return false;
-    };
-
-    let code = envelope.status.code.as_str();
-    let message = code.rsplit_once('.').map_or(code, |(_, message)| message);
-
-    matches!(message, "Success" | "Created" | "NoOperation")
-}
-
+/// Attaches the configured [`BmcCredentials`] to a request builder.
 fn auth_headers(
     request: reqwest::RequestBuilder,
     credentials: &BmcCredentials,
@@ -1671,7 +1446,6 @@ mod tests {
     use super::*;
 
     use futures_util::io::Cursor;
-    use http::HeaderValue;
     use nv_redfish_core::BmcError as _;
     use tokio::io::AsyncWriteExt as _;
     use tokio::net::TcpListener;
@@ -1965,78 +1739,6 @@ mod tests {
 
         assert_eq!(response["redirected"], true);
         mock_server.verify().await;
-
-        Ok(())
-    }
-
-    #[test]
-    fn location_header_resolves_valid_and_rejects_invalid_references(
-    ) -> Result<(), Box<dyn StdError>> {
-        struct TestCase(&'static str, Result<&'static str, &'static str>);
-
-        let response_url = Url::parse("https://bmc.example/redfish/v1/SessionService/Sessions")?;
-
-        let cases = [
-            TestCase(
-                "https://bmc.example/redfish/v1/SessionService/Sessions/1?token=abc",
-                Ok("/redfish/v1/SessionService/Sessions/1?token=abc"),
-            ),
-            TestCase(
-                "/redfish/v1/SessionService/Sessions/1?token=abc",
-                Ok("/redfish/v1/SessionService/Sessions/1?token=abc"),
-            ),
-            TestCase(
-                "Sessions/1?token=abc",
-                Ok("/redfish/v1/SessionService/Sessions/1?token=abc"),
-            ),
-            TestCase(
-                "../TaskService/Tasks/42?token=abc",
-                Ok("/redfish/v1/TaskService/Tasks/42?token=abc"),
-            ),
-            TestCase(
-                "?token=abc",
-                Ok("/redfish/v1/SessionService/Sessions?token=abc"),
-            ),
-            TestCase(
-                "//bmc.example/redfish/v1/TaskService/Tasks/42",
-                Ok("/redfish/v1/TaskService/Tasks/42"),
-            ),
-            TestCase("", Err("Location header does not identify a resource")),
-            TestCase(
-                "#fragment",
-                Err("Location header does not identify a resource"),
-            ),
-            TestCase(
-                "https://other.example/redfish/v1/TaskService/Tasks/42",
-                Err("Location header resolves to a different origin"),
-            ),
-            TestCase(
-                "//bmc.example:8443/redfish/v1/TaskService/Tasks/42",
-                Err("Location header resolves to a different origin"),
-            ),
-            TestCase(
-                "//host:99999/path",
-                Err("Location header is not a valid URI reference"),
-            ),
-        ];
-
-        for TestCase(raw, expected) in cases {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::LOCATION, raw.parse::<HeaderValue>()?);
-
-            let result =
-                location_from_headers(&headers, &response_url, reqwest::StatusCode::CREATED);
-
-            match (result, expected) {
-                (Ok(Some(location)), Ok(expected)) => {
-                    assert_eq!(location.to_string(), expected, "{raw}");
-                }
-                (Err(BmcError::InvalidResponse { text, .. }), Err(expected)) => {
-                    assert_eq!(text, expected, "{raw}");
-                }
-                _ => return Err(format!("{raw}: unexpected Location result").into()),
-            }
-        }
 
         Ok(())
     }

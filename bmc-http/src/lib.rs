@@ -43,8 +43,7 @@ pub mod credentials;
 
 #[cfg(feature = "http-extras")]
 mod concurrency;
-#[cfg(feature = "reqwest-client")]
-mod schema;
+mod response;
 
 #[cfg(feature = "reqwest-client")]
 pub mod reqwest;
@@ -83,6 +82,12 @@ use url::Url;
 pub use concurrency::ConcurrencyLimitedBmc;
 #[doc(inline)]
 pub use credentials::BmcCredentials;
+pub use response::decode_modification;
+pub use response::decode_poll;
+pub use response::strict_success_code;
+pub use response::success_code;
+pub use response::ModificationDecodeError;
+pub use response::SuccessCode;
 
 #[cfg(feature = "update-service-deprecated")]
 #[doc(inline)]
@@ -97,7 +102,9 @@ pub use nv_redfish_core::MultipartUpdateRequest;
 /// HTTP Client trait.
 ///
 /// nv-redfish-bmc-http supports any HTTP implementation that
-/// implements this [`HttpClient`] trait.
+/// implements this [`HttpClient`] trait. An implementation decodes the
+/// responses of its modifications with [`decode_modification`] and of its
+/// polls with [`decode_poll`], as the reqwest client does.
 pub trait HttpClient: Send + Sync {
     /// HTTP client error. A document that does not deserialize into the
     /// type a read asks for is one [`BmcError::into_decode_error`] gives

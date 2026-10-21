@@ -894,29 +894,46 @@ mod reqwest_client_tests {
         let cases = [
             (
                 "a Task body",
-                Some(serde_json::json!({
-                    "@odata.id": task,
-                    "@odata.type": "#Task.v1_4_3.Task",
-                    "Id": "15",
-                    "TaskMonitor": monitor,
-                })),
+                Some(
+                    serde_json::json!({
+                        "@odata.id": task,
+                        "@odata.type": "#Task.v1_4_3.Task",
+                        "Id": "15",
+                        "TaskMonitor": monitor,
+                    })
+                    .to_string(),
+                ),
                 Some(task),
             ),
             ("no body", None, None),
             (
                 "a body that is not a Task",
                 Some(
-                    serde_json::json!({ "@odata.id": resource_path, "@odata.type": "#ManagerNetworkProtocol.v1_5_0.ManagerNetworkProtocol" }),
+                    serde_json::json!({ "@odata.id": resource_path, "@odata.type": "#ManagerNetworkProtocol.v1_5_0.ManagerNetworkProtocol" })
+                        .to_string(),
                 ),
                 None,
             ),
             (
                 "another type of the Task schema",
                 Some(
-                    serde_json::json!({ "@odata.id": task, "@odata.type": "#Task.v1_4_3.Payload" }),
+                    serde_json::json!({ "@odata.id": task, "@odata.type": "#Task.v1_4_3.Payload" })
+                        .to_string(),
                 ),
                 None,
             ),
+            (
+                "a Task body of another origin",
+                Some(
+                    serde_json::json!({
+                        "@odata.id": "https://other.example/redfish/v1/TaskService/Tasks/15",
+                        "@odata.type": "#Task.v1_4_3.Task",
+                    })
+                    .to_string(),
+                ),
+                None,
+            ),
+            ("an unparsable non-JSON body", Some("{not valid json".to_string()), None),
         ];
         for (scenario, body, expected) in cases {
             let mock_server = MockServer::start().await;
@@ -924,7 +941,7 @@ mod reqwest_client_tests {
             Mock::given(method("PATCH"))
                 .and(path(resource_path))
                 .respond_with(match body {
-                    Some(body) => accepted.set_body_json(body),
+                    Some(body) => accepted.set_body_raw(body, "application/json"),
                     None => accepted,
                 })
                 .expect(1)
@@ -1430,10 +1447,22 @@ mod reqwest_client_tests {
         let success = serde_json::json!({
             "Success": {"code": "Base.1.10.Success", "message": "Successfully Completed Request."}
         });
+        let success_without_message_beside_extended_info = serde_json::json!({
+            "Success": {"code": "Base.1.10.Success"},
+            "@Message.ExtendedInfo": [{"MessageId": "Base.1.10.Success"}]
+        });
+        let success_without_message = serde_json::json!({
+            "Success": {"code": "Base.1.10.Success"}
+        });
         let not_success = serde_json::json!({
             "Success": {"code": "Base.1.10.GeneralError", "message": "A general error has occurred."}
         });
-        for (body, accepted) in [(success, true), (not_success, false)] {
+        for (body, accepted) in [
+            (success, true),
+            (success_without_message_beside_extended_info, true),
+            (success_without_message, true),
+            (not_success, false),
+        ] {
             let mock_server = MockServer::start().await;
             Mock::given(method("POST"))
                 .and(path(action_path))
@@ -1484,6 +1513,206 @@ mod reqwest_client_tests {
                 assert!(update_response.is_err(), "update accepted {}", body);
             }
         }
+        Ok(())
+    }
+
+    /// A `200 OK` to an action without a result completes it when its body is
+    /// a success message, as BMCs answer instead of `204 No Content`, and
+    /// fails it when the body reports an error, whatever messages it carries.
+    #[tokio::test]
+    async fn success_messages_decide_an_action_without_a_result(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let action_path = "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset";
+        let cases = [
+            (
+                "bmcweb and AMI",
+                serde_json::json!({"@Message.ExtendedInfo": [{
+                    "@odata.type": "#Message.v1_1_1.Message",
+                    "Message": "The request completed successfully.",
+                    "MessageArgs": [],
+                    "MessageId": "Base.1.13.0.Success",
+                    "MessageSeverity": "OK",
+                    "Resolution": "None"
+                }]}),
+                true,
+            ),
+            (
+                "DSP0266",
+                serde_json::json!({"error": {
+                    "code": "Base.1.8.Success",
+                    "message": "Successfully Completed Request",
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.8.Success", "Severity": "OK"}]
+                }}),
+                true,
+            ),
+            (
+                "HPE iLO",
+                serde_json::json!({"error": {
+                    "code": "iLO.0.10.ExtendedInfo",
+                    "message": "See @Message.ExtendedInfo for more information.",
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.4.Success"}]
+                }}),
+                true,
+            ),
+            (
+                "a message argument that is not a string",
+                serde_json::json!({"@Message.ExtendedInfo": [{
+                    "MessageId": "Base.1.8.Success",
+                    "MessageArgs": [1]
+                }]}),
+                true,
+            ),
+            (
+                "an error code with no messages",
+                serde_json::json!({"error": {
+                    "code": "Base.1.8.GeneralError",
+                    "@Message.ExtendedInfo": []
+                }}),
+                false,
+            ),
+            (
+                "an error code with a success message",
+                serde_json::json!({"error": {
+                    "code": "Base.1.8.GeneralError",
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.8.Success"}]
+                }}),
+                false,
+            ),
+            (
+                "an error code beside a success message",
+                serde_json::json!({
+                    "error": {"code": "Base.1.8.GeneralError"},
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.8.Success"}]
+                }),
+                false,
+            ),
+            (
+                "an HPE iLO error",
+                serde_json::json!({"error": {
+                    "code": "iLO.0.10.ExtendedInfo",
+                    "message": "See @Message.ExtendedInfo for more information.",
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.4.ActionParameterNotSupported"}]
+                }}),
+                false,
+            ),
+            (
+                "a critical message without a MessageId",
+                serde_json::json!({"error": {
+                    "code": "Base.1.8.Success",
+                    "message": "Successfully Completed Request",
+                    "@Message.ExtendedInfo": [{"Severity": "Critical", "Message": "Failed."}]
+                }}),
+                false,
+            ),
+        ];
+        for (scenario, body, accepted) in cases {
+            let mock_server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path(action_path))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&body))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+            let bmc = create_test_bmc(&mock_server);
+            let action: nv_redfish_core::Action<ActionRequest, ()> =
+                serde_json::from_value(serde_json::json!({ "target": action_path }))?;
+
+            let response = bmc
+                .action(
+                    &action,
+                    &ActionRequest {
+                        parameter: "GracefulRestart".to_string(),
+                    },
+                )
+                .await;
+
+            if accepted {
+                assert!(
+                    matches!(response, Ok(ModificationResponse::Empty)),
+                    "{}: {:?}",
+                    scenario,
+                    response
+                );
+            } else {
+                assert!(
+                    matches!(
+                        response,
+                        Err(BmcError::InvalidResponse {
+                            status: reqwest::StatusCode::OK,
+                            ref text,
+                            ..
+                        }) if text == &body.to_string()
+                    ),
+                    "{}: {:?}",
+                    scenario,
+                    response
+                );
+            }
+            mock_server.verify().await;
+        }
+        Ok(())
+    }
+
+    /// A `202 Accepted` that names no task monitor but returns its `Task` is
+    /// polled at that `Task`.
+    #[tokio::test]
+    async fn accepted_action_without_location_is_polled_at_its_task(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mock_server = MockServer::start().await;
+        let action_path = "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset";
+        let task_path = "/redfish/v1/TaskService/Tasks/12";
+        let task = serde_json::json!({
+            "@odata.id": task_path,
+            "@odata.type": "#Task.v1_4_3.Task",
+            "Id": "12",
+            "TaskState": "Running"
+        });
+
+        Mock::given(method("POST"))
+            .and(path(action_path))
+            .respond_with(
+                ResponseTemplate::new(202)
+                    .insert_header("Retry-After", "2")
+                    .set_body_json(&task),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(task_path))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&task))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let bmc = create_test_bmc(&mock_server);
+        let action: nv_redfish_core::Action<ActionRequest, ()> =
+            serde_json::from_value(serde_json::json!({ "target": action_path }))?;
+        let response = bmc
+            .action(
+                &action,
+                &ActionRequest {
+                    parameter: "ForceRestart".to_string(),
+                },
+            )
+            .await?;
+        let ModificationResponse::Task(accepted) = response else {
+            return Err("a 202 with a Task body is a task".into());
+        };
+        assert_eq!(accepted.location.0.to_string(), task_path);
+        assert_eq!(accepted.retry_after, Some(Duration::from_secs(2)));
+        assert_eq!(
+            accepted.task.as_ref().map(ToString::to_string).as_deref(),
+            Some(task_path)
+        );
+
+        let polled = bmc.poll::<serde_json::Value>(&accepted.location.0).await?;
+        let ModificationResponse::Entity(body) = polled else {
+            return Err("a poll of the Task reads the Task".into());
+        };
+        assert_eq!(body, task);
+        mock_server.verify().await;
+
         Ok(())
     }
 
@@ -1683,5 +1912,70 @@ mod reqwest_client_tests {
         let result = bmc.delete::<TestResource>(&resource_id).await;
 
         assert!(result.is_ok());
+    }
+
+    /// A `202 Accepted` response with a valid `Location` header still returns
+    /// [`ModificationResponse::Task`] even when reading its body fails due to a
+    /// truncated stream.
+    #[tokio::test]
+    async fn accepted_response_with_truncated_body_still_returns_task(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let monitor = "/redfish/v1/TaskService/TaskMonitors/15";
+
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept connection");
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let raw_response = format!(
+                    "HTTP/1.1 202 Accepted\r\nLocation: {monitor}\r\nRetry-After: 5\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n{{\"@odata.id\":\"/truncated"
+                );
+                stream
+                    .write_all(raw_response.as_bytes())
+                    .await
+                    .expect("write truncated 202 response");
+                let _ = stream.shutdown().await;
+            }
+        });
+
+        let bmc = HttpBmc::new(
+            test_client(ClientParams::new()),
+            Url::parse(&format!("http://{addr}"))?,
+            create_test_credentials(),
+            CacheSettings::default(),
+        );
+
+        let update_response = bmc
+            .update::<UpdateRequest, TestResource>(
+                &create_odata_id("/redfish/v1/Managers/Self/NetworkProtocol"),
+                None,
+                &UpdateRequest {
+                    name: None,
+                    value: Some(1),
+                },
+            )
+            .await?;
+        let ModificationResponse::Task(update_task) = update_response else {
+            return Err("expected task from truncated 202 update response".into());
+        };
+        assert_eq!(update_task.location.0.to_string(), monitor);
+        assert_eq!(update_task.retry_after, Some(Duration::from_secs(5)));
+        assert_eq!(update_task.task, None);
+
+        let poll_response = bmc.poll::<TestResource>(&create_odata_id(monitor)).await?;
+        let ModificationResponse::Task(poll_task) = poll_response else {
+            return Err("expected task from truncated 202 poll response".into());
+        };
+        assert_eq!(poll_task.location.0.to_string(), monitor);
+        assert_eq!(poll_task.retry_after, Some(Duration::from_secs(5)));
+        assert_eq!(poll_task.task, None);
+
+        server.await?;
+        Ok(())
     }
 }
