@@ -44,7 +44,6 @@ pub mod credentials;
 #[cfg(feature = "http-extras")]
 mod concurrency;
 mod response;
-mod schema;
 
 #[cfg(feature = "reqwest-client")]
 pub mod reqwest;
@@ -85,6 +84,7 @@ pub use concurrency::ConcurrencyLimitedBmc;
 pub use credentials::BmcCredentials;
 pub use response::decode_modification;
 pub use response::decode_poll;
+pub use response::strict_success_code;
 pub use response::success_code;
 pub use response::ModificationDecodeError;
 pub use response::SuccessCode;

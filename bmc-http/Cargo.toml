@@ -52,10 +52,6 @@ url = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 time = { workspace = true, features = ["serde", "formatting", "parsing"] }
 
-[build-dependencies]
-nv-redfish-csdl-compiler = { workspace = true }
-nv-redfish-schema = { workspace = true }
-
 [dev-dependencies]
 rustls = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "sync"] }
