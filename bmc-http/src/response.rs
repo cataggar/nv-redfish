@@ -54,7 +54,7 @@ pub enum ModificationDecodeError {
     /// The body is not JSON.
     Json(serde_json::Error),
     /// The body deserialized neither into the requested type nor as a
-    /// success message.
+    /// message envelope.
     Decode(DecodeError),
 }
 
@@ -192,8 +192,9 @@ fn key(id: &str) -> &str {
 /// `MessageId`, makes the body not a success, as does
 /// `@Message.ExtendedInfo` that is not an array.
 ///
-/// A success can come with warnings and other messages. A caller that must
-/// not count those, such as one that resets a host, uses
+/// A success can come with warnings and other messages. An
+/// [`HttpClient`](crate::HttpClient) or decoder caller that has the response
+/// body and must not count those, such as for a host reset, uses
 /// [`strict_success_code`].
 #[must_use]
 pub fn success_code(body: &Value) -> Option<SuccessCode> {
@@ -211,9 +212,10 @@ pub fn success_code(body: &Value) -> Option<SuccessCode> {
 ///
 /// So a warning, a message from another registry such as Dell's
 /// `IDRAC.2.9.SYS413`, or an empty `@Message.ExtendedInfo` makes this
-/// `None` although [`success_code`] reads a success. A caller that must know
-/// that an action did what it asked, such as a host reset, accepts only
-/// `Some(SuccessCode::Success)`.
+/// `None` although [`success_code`] reads a success. An
+/// [`HttpClient`](crate::HttpClient) or decoder caller that has the response
+/// body and must know that an action did what it asked, such as a host
+/// reset, accepts only `Some(SuccessCode::Success)`.
 #[must_use]
 pub fn strict_success_code(body: &Value) -> Option<SuccessCode> {
     report(body)
@@ -337,6 +339,14 @@ fn report(body: &Value) -> Option<Report> {
     })
 }
 
+/// Whether `body` is a Redfish status or message envelope: it has `error`,
+/// `Success`, or `@Message.ExtendedInfo`.
+fn is_message_envelope(body: &Value) -> bool {
+    ["error", "Success", "@Message.ExtendedInfo"]
+        .iter()
+        .any(|property| body.get(property).is_some_and(|value| !value.is_null()))
+}
+
 /// Decodes the response to a request that modifies a service: an action, a
 /// create, an update, a delete or an upload.
 ///
@@ -345,9 +355,9 @@ fn report(body: &Value) -> Option<Report> {
 ///
 /// - `204 No Content` is [`ModificationResponse::Empty`].
 /// - `202 Accepted` is a [`ModificationResponse::Task`] at its `Location`,
-///   to poll after its `Retry-After` seconds, with the `Task` resource its
-///   body represents, if any. Without a `Location`, it is at that `Task`,
-///   which a poll reads instead of a task monitor.
+///   to poll after its `Retry-After` seconds, with the same-origin `Task`
+///   resource its body represents, if any. Without a `Location`, it is at
+///   that `Task`, which a poll reads instead of a task monitor.
 /// - `200 OK` or `201 Created` is the body as `T`, with the `ETag` header as
 ///   the `@odata.etag` of a body that names its `@odata.id`. A body that is
 ///   not `T` but a success message (see [`success_code`]) is
@@ -356,19 +366,21 @@ fn report(body: &Value) -> Option<Report> {
 ///   [`ModificationResponse::Empty`] without a `Location`.
 ///
 /// A success message is [`ModificationResponse::Empty`] whatever it reports,
-/// `NoOperation` and warnings included. A caller that must tell those apart
-/// reads the body with [`success_code`] or [`strict_success_code`].
+/// `NoOperation` and warnings included. An [`HttpClient`](crate::HttpClient)
+/// or decoder caller that has the response body and must tell those apart
+/// inspects it with [`success_code`] or [`strict_success_code`].
 ///
 /// # Errors
 ///
-/// - [`ModificationDecodeError::InvalidResponse`] for an unsuccessful status,
-///   with the body as its text; another successful status; a `202` with
-///   neither a `Location` nor a `Task` body; or a `Location` or `Task` that
-///   does not name a resource of the same origin.
+/// - [`ModificationDecodeError::InvalidResponse`] for an unsuccessful status
+///   or a `200` or `201` message envelope that is not a success, with the
+///   body as its text; another successful status; a `202` with neither a
+///   `Location` nor a same-origin `Task` body; or a `Location` that does not
+///   name a resource of the same origin.
 /// - [`ModificationDecodeError::Json`] when a `200` or `201` body is not JSON.
 /// - [`ModificationDecodeError::Decode`] when a `200` or `201` body is neither
-///   `T` nor a success message, or an empty one names a `Location` that is not
-///   a `T`.
+///   `T` nor a message envelope, or an empty one names a `Location` that is
+///   not a `T`.
 pub fn decode_modification<T>(
     url: &Url,
     status: StatusCode,
@@ -395,21 +407,15 @@ where
     match status {
         StatusCode::NO_CONTENT => Ok(ModificationResponse::Empty),
         StatusCode::ACCEPTED => {
-            let task = task_from_body(body);
-            let task_location = match (location?, &task) {
-                (Some(location), _) => location,
-                // DSP0266 names the task monitor in Location. A service that
-                // names none can still return the Task, which can be polled.
-                (None, Some(task)) => {
-                    same_origin_reference(&task.to_string(), url, status, "Task @odata.id")?
-                }
-                (None, None) => {
-                    return Err(ModificationDecodeError::InvalidResponse {
-                        url: url.clone(),
-                        status,
-                        text: String::from("202 Accepted without Location header"),
-                    })
-                }
+            let task = task_from_body(body, url);
+            // DSP0266 names the task monitor in Location. A service that
+            // names none can still return the Task, which can be polled.
+            let Some(task_location) = location?.or_else(|| task.clone()) else {
+                return Err(ModificationDecodeError::InvalidResponse {
+                    url: url.clone(),
+                    status,
+                    text: String::from("202 Accepted without Location header"),
+                });
             };
 
             Ok(ModificationResponse::Task(AsyncTask {
@@ -451,9 +457,19 @@ where
                                     }));
                             }
                             Ok(ModificationResponse::Empty)
+                        } else if is_message_envelope(&value) {
+                            // A message envelope that is not a success, such
+                            // as a 200 with a Critical message or an error
+                            // code, carries the BMC's error in its body.
+                            Err(ModificationDecodeError::InvalidResponse {
+                                url: url.clone(),
+                                status,
+                                text: String::from_utf8_lossy(body).into_owned(),
+                            })
                         } else {
-                            // The response was successful JSON, but it did
-                            // not match the caller-selected response type.
+                            // The response was successful JSON, but it was
+                            // neither the caller-selected type nor a message
+                            // envelope.
                             Err(ModificationDecodeError::Decode(err))
                         }
                     }
@@ -505,7 +521,7 @@ where
             Ok(ModificationResponse::Task(AsyncTask {
                 location: location.into(),
                 retry_after: retry_after_from_headers(headers),
-                task: task_from_body(body),
+                task: task_from_body(body, url),
             }))
         }
         StatusCode::NO_CONTENT => location_from_headers(headers, url, status)?.map_or(
@@ -610,8 +626,9 @@ pub fn etag_from_headers(headers: &HeaderMap) -> Option<ODataETag> {
         .map(|v| v.to_string().into())
 }
 
-/// The `Task` resource a `202 Accepted` body represents, if the body is one.
-fn task_from_body(body: &[u8]) -> Option<ODataId> {
+/// The `Task` resource a `202 Accepted` body represents, resolved to a
+/// same-origin path and query against `response_url`, if the body is one.
+fn task_from_body(body: &[u8], response_url: &Url) -> Option<ODataId> {
     let value: Value = serde_json::from_slice(body).ok()?;
     let is_task = ODataType::parse_from(&value).is_some_and(|odata_type| {
         odata_type.namespace.first() == Some(&"Task") && odata_type.type_name == "Task"
@@ -619,10 +636,8 @@ fn task_from_body(body: &[u8]) -> Option<ODataId> {
     if !is_task {
         return None;
     }
-    value
-        .get("@odata.id")
-        .and_then(Value::as_str)
-        .map(|id| ODataId::from(id.to_string()))
+    let id = value.get("@odata.id")?.as_str()?;
+    same_origin_reference(id, response_url, StatusCode::ACCEPTED, "Task @odata.id").ok()
 }
 
 /// Parses a numeric `Retry-After` header from `headers` as a delay in seconds.
@@ -1253,11 +1268,11 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that malformed JSON and non-success payloads return decode errors.
+    /// Verifies that non-success message envelopes return [`ModificationDecodeError::InvalidResponse`]
+    /// with the body text, while non-message payloads and malformed JSON return parse errors.
     #[test]
     fn a_body_that_is_neither_the_result_nor_a_success_message_fails() {
         for body in [
-            json!({"Result": "Accepted"}),
             json!({"error": {"code": "Base.1.8.GeneralError", "message": "Failed."}}),
             json!({"error": {"code": "Base.1.8.GeneralError", "@Message.ExtendedInfo": []}}),
             json!({"error": {
@@ -1268,21 +1283,44 @@ mod tests {
                 "code": "iLO.0.10.ExtendedInfo",
                 "@Message.ExtendedInfo": [{"MessageId": "Base.1.4.ActionParameterNotSupported"}]
             }}),
+            json!({"Success": {"code": "Base.1.10.GeneralError", "message": "Failed."}}),
             json!({"@Message.ExtendedInfo": [{
-                "MessageId": "Base.1.8.InternalError",
+                "MessageId": "Base.1.18.1.PropertyValueNotInList",
+                "Message": "The value 'X' for the property Y is not in the list of acceptable values.",
                 "MessageSeverity": "Critical"
             }]}),
         ] {
             let error =
                 decode::<()>(StatusCode::OK, &HeaderMap::new(), &body).expect_err("not a success");
             assert!(
-                matches!(error, ModificationDecodeError::Decode(_)),
+                matches!(
+                    error,
+                    ModificationDecodeError::InvalidResponse {
+                        status: StatusCode::OK,
+                        ref text,
+                        ..
+                    } if text == &body.to_string()
+                ),
                 "{}: {}",
                 body,
                 error
             );
-            assert_eq!(error.error_class(), BmcErrorClass::ResponseParse);
+            assert_eq!(
+                error.error_class(),
+                BmcErrorClass::HttpResponse { status: 200 }
+            );
         }
+
+        let body = json!({"Result": "Accepted"});
+        let error = decode::<()>(StatusCode::OK, &HeaderMap::new(), &body)
+            .expect_err("neither T nor a message");
+        assert!(
+            matches!(error, ModificationDecodeError::Decode(_)),
+            "{}: {}",
+            body,
+            error
+        );
+        assert_eq!(error.error_class(), BmcErrorClass::ResponseParse);
 
         let error = decode_modification::<()>(&url(), StatusCode::OK, &HeaderMap::new(), b"{")
             .expect_err("not JSON");
@@ -1408,7 +1446,7 @@ mod tests {
             &url(),
             StatusCode::ACCEPTED,
             &monitor,
-            task_body("/redfish/v1/TaskService/Tasks/7").as_bytes(),
+            task_body("https://bmc.example/redfish/v1/TaskService/Tasks/7?x=1").as_bytes(),
         )?
         else {
             return Err("a 202 with a Location is a task".into());
@@ -1420,8 +1458,23 @@ mod tests {
         assert_eq!(task.retry_after, Some(Duration::from_secs(3)));
         assert_eq!(
             task.task.as_ref().map(ToString::to_string).as_deref(),
-            Some("/redfish/v1/TaskService/Tasks/7")
+            Some("/redfish/v1/TaskService/Tasks/7?x=1")
         );
+
+        let ModificationResponse::Task(task_with_cross_origin_body) = decode_modification::<()>(
+            &url(),
+            StatusCode::ACCEPTED,
+            &monitor,
+            task_body("https://other.example/redfish/v1/TaskService/Tasks/7").as_bytes(),
+        )?
+        else {
+            return Err("a 202 with a Location ignores a cross-origin Task body".into());
+        };
+        assert_eq!(
+            task_with_cross_origin_body.location.0.to_string(),
+            "/redfish/v1/TaskService/TaskMonitors/7"
+        );
+        assert_eq!(task_with_cross_origin_body.task, None);
 
         let retry = headers(&[(header::RETRY_AFTER, "3")]);
         let ModificationResponse::Task(task) = decode_modification::<()>(
@@ -1453,7 +1506,7 @@ mod tests {
         assert!(matches!(
             error,
             ModificationDecodeError::InvalidResponse { ref text, .. }
-                if text == "Task @odata.id resolves to a different origin"
+                if text == "202 Accepted without Location header"
         ));
 
         // Without a Task to poll, as Supermicro answers a staged change, a 202

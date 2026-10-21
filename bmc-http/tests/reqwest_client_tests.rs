@@ -922,6 +922,17 @@ mod reqwest_client_tests {
                 ),
                 None,
             ),
+            (
+                "a Task body of another origin",
+                Some(
+                    serde_json::json!({
+                        "@odata.id": "https://other.example/redfish/v1/TaskService/Tasks/15",
+                        "@odata.type": "#Task.v1_4_3.Task",
+                    })
+                    .to_string(),
+                ),
+                None,
+            ),
             ("an unparsable non-JSON body", Some("{not valid json".to_string()), None),
         ];
         for (scenario, body, expected) in cases {
@@ -1624,7 +1635,14 @@ mod reqwest_client_tests {
                 );
             } else {
                 assert!(
-                    matches!(response, Err(BmcError::JsonError(_))),
+                    matches!(
+                        response,
+                        Err(BmcError::InvalidResponse {
+                            status: reqwest::StatusCode::OK,
+                            ref text,
+                            ..
+                        }) if text == &body.to_string()
+                    ),
                     "{}: {:?}",
                     scenario,
                     response
