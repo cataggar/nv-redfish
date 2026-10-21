@@ -1036,7 +1036,11 @@ async fn successful_response(
         });
     }
     let headers = response.headers().clone();
-    let body = response.bytes().await.map_err(BmcError::ReqwestError)?;
+    let body = match status {
+        reqwest::StatusCode::NO_CONTENT => Bytes::new(),
+        reqwest::StatusCode::ACCEPTED => response.bytes().await.unwrap_or_default(),
+        _ => response.bytes().await.map_err(BmcError::ReqwestError)?,
+    };
     Ok((url, status, headers, body))
 }
 

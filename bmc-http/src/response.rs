@@ -149,13 +149,14 @@ impl SuccessCode {
 /// with messages alone too:
 ///
 /// - A body with `error`, or with `Success` as Supermicro BMCs use, reports
-///   that object's `code`, as in `{"error": {"code": "Base.1.8.Success",
-///   "message": "..."}}`. Any other code is not a success, even when the
-///   body also has `@Message.ExtendedInfo`.
-/// - A body with only `@Message.ExtendedInfo` is [`SuccessCode::Created`]
-///   when one of its messages is `Created`, [`SuccessCode::NoOperation`]
-///   when all of them are `NoOperation`, and otherwise
-///   [`SuccessCode::Success`].
+///   that object's `code` when it deserializes as [`RedfishErrorContents`],
+///   as in `{"error": {"code": "Base.1.8.Success", "message": "..."}}`. Any
+///   other code is not a success, even when the body also has
+///   `@Message.ExtendedInfo`.
+/// - Otherwise, `@Message.ExtendedInfo` (on the body or on `error`/`Success`)
+///   is [`SuccessCode::Created`] when one of its messages is `Created`,
+///   [`SuccessCode::NoOperation`] when all of them are `NoOperation`, and
+///   otherwise [`SuccessCode::Success`].
 ///
 /// A message with a `Critical` `MessageSeverity` or `Severity` makes the body
 /// not a success.
@@ -185,15 +186,18 @@ pub fn success_code(body: &Value) -> Option<SuccessCode> {
         return None;
     }
 
-    if let Some(status) = body.get("error").or_else(|| body.get("Success")) {
-        let contents = <RedfishErrorContents as serde::Deserialize>::deserialize(status).ok()?;
-        if messages(status).as_deref().is_some_and(is_critical) {
-            return None;
-        }
+    let status = body.get("error").or_else(|| body.get("Success"));
+    let status_messages = status.and_then(messages);
+    if status_messages.as_deref().is_some_and(is_critical) {
+        return None;
+    }
+    if let Some(contents) = status
+        .and_then(|status| <RedfishErrorContents as serde::Deserialize>::deserialize(status).ok())
+    {
         return SuccessCode::of(&contents.code);
     }
 
-    let body_messages = body_messages?;
+    let body_messages = body_messages.or(status_messages)?;
     let codes = || {
         body_messages
             .iter()
@@ -570,9 +574,48 @@ mod tests {
                 json!({"error": {"code": "Base.1.8.GeneralError", "message": "Failed."}}),
                 None,
             ),
-            // A status object without its required message is not one.
+            // A status object without its required message is not one, unless
+            // valid @Message.ExtendedInfo is also present.
             (json!({"Success": {"code": "Base.1.10.Success"}}), None),
             (json!({"Success": "Base.1.10.Success"}), None),
+            (
+                json!({
+                    "Success": {"code": "Base.1.10.Success"},
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.10.Success"}]
+                }),
+                Some(SuccessCode::Success),
+            ),
+            (
+                json!({
+                    "Success": "Base.1.10.Success",
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.10.Created"}]
+                }),
+                Some(SuccessCode::Created),
+            ),
+            (
+                json!({
+                    "error": {"message": "Nothing."},
+                    "@Message.ExtendedInfo": [{"MessageId": "Base.1.8.NoOperation"}]
+                }),
+                Some(SuccessCode::NoOperation),
+            ),
+            (
+                json!({
+                    "Success": {
+                        "code": "Base.1.10.Success",
+                        "@Message.ExtendedInfo": [{"MessageId": "Base.1.10.Success"}]
+                    }
+                }),
+                Some(SuccessCode::Success),
+            ),
+            (
+                json!({
+                    "error": {
+                        "@Message.ExtendedInfo": [{"MessageId": "Base.1.8.Created"}]
+                    }
+                }),
+                Some(SuccessCode::Created),
+            ),
             // Extended information alone.
             (
                 json!({"@Message.ExtendedInfo": [{
@@ -651,6 +694,28 @@ mod tests {
                 "error": {"code": "Base.1.8.GeneralError", "message": "Failed."},
                 "@Message.ExtendedInfo": [{"MessageId": "Base.1.8.Success"}]
             }),
+            // An unparsable status object still rejects critical messages and
+            // malformed @Message.ExtendedInfo.
+            json!({
+                "Success": {"code": "Base.1.10.Success"},
+                "@Message.ExtendedInfo": [{
+                    "MessageId": "Base.1.10.InternalError",
+                    "MessageSeverity": "Critical"
+                }]
+            }),
+            json!({
+                "Success": {
+                    "code": "Base.1.10.Success",
+                    "@Message.ExtendedInfo": [{
+                        "MessageId": "Base.1.10.InternalError",
+                        "Severity": "Critical"
+                    }]
+                }
+            }),
+            json!({
+                "Success": {"code": "Base.1.10.Success"},
+                "@Message.ExtendedInfo": [{"Message": "Missing MessageId."}]
+            }),
         ] {
             assert_eq!(success_code(&body), None, "{body}");
         }
@@ -662,6 +727,10 @@ mod tests {
         for body in [
             json!({"error": {"code": "Base.1.8.Success", "message": "Done."}}),
             json!({"Success": {"code": "Base.1.10.Success", "message": "Done."}}),
+            json!({
+                "Success": {"code": "Base.1.10.Success"},
+                "@Message.ExtendedInfo": [{"MessageId": "Base.1.10.Success"}]
+            }),
             json!({"@Message.ExtendedInfo": [{"MessageId": "Base.1.13.0.Success"}]}),
         ] {
             let response = decode::<()>(StatusCode::OK, &HeaderMap::new(), &body)?;
@@ -760,6 +829,21 @@ mod tests {
             Some("/redfish/v1/TaskService/Tasks/7")
         );
 
+        let ModificationResponse::Task(task_with_unparsable_body) = decode_modification::<()>(
+            &url(),
+            StatusCode::ACCEPTED,
+            &accepted,
+            b"not valid json {",
+        )?
+        else {
+            return Err("202 with unparsable body and valid Location is still a task".into());
+        };
+        assert_eq!(
+            task_with_unparsable_body.location.0.to_string(),
+            "/redfish/v1/TaskService/Tasks/7"
+        );
+        assert_eq!(task_with_unparsable_body.task, None);
+
         let error = decode_modification::<()>(&url(), StatusCode::ACCEPTED, &HeaderMap::new(), b"")
             .expect_err("202 without Location");
         assert!(matches!(
@@ -840,6 +924,23 @@ mod tests {
             "/redfish/v1/TaskService/TaskMonitors/1?x=y"
         );
 
+        let polled_with_location =
+            headers(&[(header::LOCATION, "/redfish/v1/TaskService/TaskMonitors/2")]);
+        let ModificationResponse::Task(task_with_unparsable_body) = decode_poll::<()>(
+            &polled,
+            StatusCode::ACCEPTED,
+            &polled_with_location,
+            b"not valid json {",
+        )?
+        else {
+            return Err("202 poll with unparsable body and valid Location is still a task".into());
+        };
+        assert_eq!(
+            task_with_unparsable_body.location.0.to_string(),
+            "/redfish/v1/TaskService/TaskMonitors/2"
+        );
+        assert_eq!(task_with_unparsable_body.task, None);
+
         let created = headers(&[(header::LOCATION, "/redfish/v1/Systems/1")]);
         let ModificationResponse::Entity(reference) =
             decode_poll::<Reference>(&polled, StatusCode::NO_CONTENT, &created, b"")?
@@ -853,6 +954,14 @@ mod tests {
             StatusCode::OK,
             &HeaderMap::new(),
             br#"{"Success":{"code":"Base.1.10.Success","message":"Done."}}"#,
+        )?;
+        assert!(matches!(response, ModificationResponse::Empty));
+
+        let response = decode_poll::<()>(
+            &polled,
+            StatusCode::OK,
+            &HeaderMap::new(),
+            br#"{"Success":{"code":"Base.1.10.Success"},"@Message.ExtendedInfo":[{"MessageId":"Base.1.10.Success"}]}"#,
         )?;
         assert!(matches!(response, ModificationResponse::Empty));
         Ok(())

@@ -894,29 +894,35 @@ mod reqwest_client_tests {
         let cases = [
             (
                 "a Task body",
-                Some(serde_json::json!({
-                    "@odata.id": task,
-                    "@odata.type": "#Task.v1_4_3.Task",
-                    "Id": "15",
-                    "TaskMonitor": monitor,
-                })),
+                Some(
+                    serde_json::json!({
+                        "@odata.id": task,
+                        "@odata.type": "#Task.v1_4_3.Task",
+                        "Id": "15",
+                        "TaskMonitor": monitor,
+                    })
+                    .to_string(),
+                ),
                 Some(task),
             ),
             ("no body", None, None),
             (
                 "a body that is not a Task",
                 Some(
-                    serde_json::json!({ "@odata.id": resource_path, "@odata.type": "#ManagerNetworkProtocol.v1_5_0.ManagerNetworkProtocol" }),
+                    serde_json::json!({ "@odata.id": resource_path, "@odata.type": "#ManagerNetworkProtocol.v1_5_0.ManagerNetworkProtocol" })
+                        .to_string(),
                 ),
                 None,
             ),
             (
                 "another type of the Task schema",
                 Some(
-                    serde_json::json!({ "@odata.id": task, "@odata.type": "#Task.v1_4_3.Payload" }),
+                    serde_json::json!({ "@odata.id": task, "@odata.type": "#Task.v1_4_3.Payload" })
+                        .to_string(),
                 ),
                 None,
             ),
+            ("an unparsable non-JSON body", Some("{not valid json".to_string()), None),
         ];
         for (scenario, body, expected) in cases {
             let mock_server = MockServer::start().await;
@@ -924,7 +930,7 @@ mod reqwest_client_tests {
             Mock::given(method("PATCH"))
                 .and(path(resource_path))
                 .respond_with(match body {
-                    Some(body) => accepted.set_body_json(body),
+                    Some(body) => accepted.set_body_raw(body, "application/json"),
                     None => accepted,
                 })
                 .expect(1)
@@ -1430,10 +1436,22 @@ mod reqwest_client_tests {
         let success = serde_json::json!({
             "Success": {"code": "Base.1.10.Success", "message": "Successfully Completed Request."}
         });
+        let unparsable_success_with_extended_info = serde_json::json!({
+            "Success": {"code": "Base.1.10.Success"},
+            "@Message.ExtendedInfo": [{"MessageId": "Base.1.10.Success"}]
+        });
+        let unparsable_success_without_extended_info = serde_json::json!({
+            "Success": {"code": "Base.1.10.Success"}
+        });
         let not_success = serde_json::json!({
             "Success": {"code": "Base.1.10.GeneralError", "message": "A general error has occurred."}
         });
-        for (body, accepted) in [(success, true), (not_success, false)] {
+        for (body, accepted) in [
+            (success, true),
+            (unparsable_success_with_extended_info, true),
+            (unparsable_success_without_extended_info, false),
+            (not_success, false),
+        ] {
             let mock_server = MockServer::start().await;
             Mock::given(method("POST"))
                 .and(path(action_path))
@@ -1683,5 +1701,70 @@ mod reqwest_client_tests {
         let result = bmc.delete::<TestResource>(&resource_id).await;
 
         assert!(result.is_ok());
+    }
+
+    /// A `202 Accepted` response with a valid `Location` header still returns
+    /// [`ModificationResponse::Task`] even when reading its body fails due to a
+    /// truncated stream.
+    #[tokio::test]
+    async fn accepted_response_with_truncated_body_still_returns_task(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let monitor = "/redfish/v1/TaskService/TaskMonitors/15";
+
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().await.expect("accept connection");
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let raw_response = format!(
+                    "HTTP/1.1 202 Accepted\r\nLocation: {monitor}\r\nRetry-After: 5\r\nContent-Type: application/json\r\nContent-Length: 200\r\nConnection: close\r\n\r\n{{\"@odata.id\":\"/truncated"
+                );
+                stream
+                    .write_all(raw_response.as_bytes())
+                    .await
+                    .expect("write truncated 202 response");
+                let _ = stream.shutdown().await;
+            }
+        });
+
+        let bmc = HttpBmc::new(
+            test_client(ClientParams::new()),
+            Url::parse(&format!("http://{addr}"))?,
+            create_test_credentials(),
+            CacheSettings::default(),
+        );
+
+        let update_response = bmc
+            .update::<UpdateRequest, TestResource>(
+                &create_odata_id("/redfish/v1/Managers/Self/NetworkProtocol"),
+                None,
+                &UpdateRequest {
+                    name: None,
+                    value: Some(1),
+                },
+            )
+            .await?;
+        let ModificationResponse::Task(update_task) = update_response else {
+            return Err("expected task from truncated 202 update response".into());
+        };
+        assert_eq!(update_task.location.0.to_string(), monitor);
+        assert_eq!(update_task.retry_after, Some(Duration::from_secs(5)));
+        assert_eq!(update_task.task, None);
+
+        let poll_response = bmc.poll::<TestResource>(&create_odata_id(monitor)).await?;
+        let ModificationResponse::Task(poll_task) = poll_response else {
+            return Err("expected task from truncated 202 poll response".into());
+        };
+        assert_eq!(poll_task.location.0.to_string(), monitor);
+        assert_eq!(poll_task.retry_after, Some(Duration::from_secs(5)));
+        assert_eq!(poll_task.task, None);
+
+        server.await?;
+        Ok(())
     }
 }
