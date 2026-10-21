@@ -17,6 +17,9 @@
 //!
 //! This module provides typed access to Redfish `EventService`.
 
+mod item;
+
+use crate::schema::event_destination_collection::EventDestinationCollection as EventDestinationCollectionSchema;
 use crate::schema::event_service::EventService as EventServiceSchema;
 use crate::Error;
 use crate::NvBmc;
@@ -24,7 +27,10 @@ use crate::ServiceRoot;
 use futures_util::TryStreamExt as _;
 use nv_redfish_core::odata::ODataType;
 use nv_redfish_core::Bmc;
+use nv_redfish_core::BmcError as _;
+use nv_redfish_core::BmcErrorClass;
 use nv_redfish_core::BoxTryStream;
+use nv_redfish_core::NavProperty;
 use nv_redfish_core::StreamEvent;
 use serde::de;
 use serde::Deserialize;
@@ -37,6 +43,12 @@ pub use crate::schema::metric_report::MetricReport;
 
 #[doc(inline)]
 pub use crate::schema::event::Event;
+
+#[doc(inline)]
+pub use item::EventDestination;
+
+#[doc(inline)]
+pub use crate::schema::event_destination::SubscriptionType;
 
 /// SSE payload that can contain either an `EventRecord` or a `MetricReport`.
 #[derive(Debug)]
@@ -102,6 +114,43 @@ impl<B: Bmc> EventService<B> {
     #[must_use]
     pub fn raw(&self) -> Arc<EventServiceSchema> {
         self.data.clone()
+    }
+
+    /// List the `EventDestination`s in `Subscriptions`; empty if the service
+    /// doesn't advertise it.
+    ///
+    /// A destination deleted while the list is read is omitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the collection or a destination cannot be fetched
+    /// or deserialized.
+    pub async fn subscriptions(&self) -> Result<Vec<EventDestination<B>>, Error<B>> {
+        let Some(subscriptions) = &self.data.subscriptions else {
+            return Ok(Vec::new());
+        };
+
+        // Read fresh: a `Subscriptions` the `EventService` response expanded
+        // inline can predate a destination.
+        let collection = NavProperty::<EventDestinationCollectionSchema>::new_reference(
+            subscriptions.id().clone(),
+        )
+        .get(self.bmc.as_ref())
+        .await
+        .map_err(Error::from)?;
+
+        let mut listed = Vec::with_capacity(collection.members.len());
+
+        for member in &collection.members {
+            match EventDestination::new(&self.bmc, member).await {
+                Ok(destination) => listed.push(destination),
+                Err(Error::Bmc(cause))
+                    if cause.error_class() == BmcErrorClass::HttpResponse { status: 404 } => {}
+                Err(error) => return Err(error),
+            }
+        }
+
+        Ok(listed)
     }
 
     /// Open an SSE stream of Redfish event payloads.
