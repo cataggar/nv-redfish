@@ -984,6 +984,56 @@ async fn viking_with_garbage_in_computer_systems() -> Result<(), Box<dyn StdErro
     Ok(())
 }
 
+#[test]
+async fn member_links_allow_independent_system_fetches() -> Result<(), Box<dyn StdError>> {
+    let bmc = Arc::new(Bmc::default());
+    let ids = computer_system_ids();
+    let hgx_id = format!("{}/HGX_Baseboard_0", ids.systems_id);
+    let host_id = format!("{}/System_0", ids.systems_id);
+
+    let systems = get_systems(
+        bmc.clone(),
+        &ids,
+        "AMI",
+        vec![
+            json!({
+                "@odata.context": "/redfish/v1/$metadata#ComputerSystem.ComputerSystem",
+                ODATA_ID: &hgx_id
+            }),
+            json!({ ODATA_ID: &host_id }),
+        ],
+    )
+    .await?;
+
+    let links = systems.member_links();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].odata_id().to_string(), hgx_id);
+    assert_eq!(links[1].odata_id().to_string(), host_id);
+
+    // A malformed or failing proxied system does not block fetching the host system.
+    bmc.expect(Expect::get(&hgx_id, json!({})));
+    assert!(links[0].upgrade::<ComputerSystem<Bmc>>().await.is_err());
+
+    bmc.expect(Expect::get(
+        &host_id,
+        computer_system(
+            &ids,
+            json!({
+                ODATA_ID: &host_id,
+                "Model": "GB300"
+            }),
+        ),
+    ));
+    let system = links[1].upgrade::<ComputerSystem<Bmc>>().await?;
+    assert_eq!(system.raw().odata_id.to_string(), host_id);
+    assert_eq!(
+        system.hardware_id().model.map(|v| v.to_string()),
+        Some("GB300".into())
+    );
+
+    Ok(())
+}
+
 struct ComputerSystemIds {
     root_id: ODataId,
     systems_id: String,

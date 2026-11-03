@@ -50,9 +50,8 @@ use serde::Serializer;
 use std::sync::Arc;
 
 /// Reference variant of the navigation property (only `@odata.id`
-/// property is specified).
+/// and optional `@odata.*` metadata properties are specified).
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
 pub struct Reference {
     #[serde(rename = "@odata.id")]
     odata_id: ODataId,
@@ -96,6 +95,12 @@ pub struct ReferenceLeaf {
 #[derive(Debug)]
 pub struct Expanded<T>(Arc<T>);
 
+impl<T> Clone for Expanded<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
 /// Deserializer that wraps the expanded property value into an `Arc`.
 impl<'de, T> Deserialize<'de> for Expanded<T>
 where
@@ -121,6 +126,15 @@ pub enum NavProperty<T: EntityTypeRef> {
     Reference(Reference),
 }
 
+impl<T: EntityTypeRef> Clone for NavProperty<T> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Expanded(expanded) => Self::Expanded(expanded.clone()),
+            Self::Reference(reference) => Self::Reference(reference.clone()),
+        }
+    }
+}
+
 impl<'de, T> Deserialize<'de> for NavProperty<T>
 where
     T: EntityTypeRef + for<'dt> Deserialize<'dt>,
@@ -130,9 +144,9 @@ where
         D: Deserializer<'de>,
     {
         let value = serde_json::Value::deserialize(deserializer)?;
-        let is_reference = value
-            .as_object()
-            .is_some_and(|obj| obj.len() == 1 && obj.contains_key("@odata.id"));
+        let is_reference = value.as_object().is_some_and(|obj| {
+            obj.contains_key("@odata.id") && obj.keys().all(|k| k.starts_with("@odata."))
+        });
 
         if is_reference {
             let reference = serde_json::from_value::<Reference>(value)
@@ -384,6 +398,29 @@ mod tests {
                 assert_eq!(expanded.0.name, "NoIdObject");
             }
             NavProperty::Reference(_) => panic!("expected expanded variant"),
+        }
+    }
+
+    #[test]
+    fn nav_property_reference_for_odata_id_with_odata_annotations() {
+        let parsed: NavProperty<DummyEntity> = serde_json::from_str(
+            r#"{
+                "@odata.context": "/redfish/v1/$metadata#Manager.Manager",
+                "@odata.id": "/redfish/v1/Managers/HGX_BMC_0"
+            }"#,
+        )
+        .unwrap();
+
+        let cloned = parsed.clone();
+        assert_eq!(cloned.id(), parsed.id());
+        match cloned {
+            NavProperty::Reference(reference) => {
+                assert_eq!(
+                    reference.odata_id.to_string(),
+                    "/redfish/v1/Managers/HGX_BMC_0"
+                );
+            }
+            NavProperty::Expanded(_) => panic!("expected reference variant"),
         }
     }
 

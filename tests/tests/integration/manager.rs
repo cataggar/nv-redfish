@@ -894,6 +894,72 @@ async fn viking_with_garbage_in_managers() -> Result<(), Box<dyn StdError>> {
     Ok(())
 }
 
+#[test]
+async fn member_links_allow_independent_manager_fetches_and_odata_context_stubs(
+) -> Result<(), Box<dyn StdError>> {
+    let bmc = Arc::new(Bmc::default());
+    let ids = ids();
+    let bmc_0_id = format!("{}/BMC_0", ids.managers_id);
+    let hgx_bmc_id = format!("{}/HGX_BMC_0", ids.managers_id);
+
+    bmc.expect(Expect::get(
+        &ids.root_id,
+        json!({
+            ODATA_ID: &ids.root_id,
+            ODATA_TYPE: "#ServiceRoot.v1_13_0.ServiceRoot",
+            "Id": "RootService",
+            "Name": "RootService",
+            "Vendor": "AMI",
+            "ProtocolFeaturesSupported": {
+                "ExpandQuery": {
+                    "NoLinks": true
+                }
+            },
+            "Managers": { ODATA_ID: &ids.managers_id },
+            "Links": {
+                "Sessions": {
+                    ODATA_ID: format!("{}/SessionService/Sessions", ids.root_id),
+                }
+            },
+        }),
+    ));
+    let service_root = ServiceRoot::new(bmc.clone()).await?;
+
+    // Inline-expanded BMC_0 alongside an unexpanded HGX_BMC_0 stub with @odata.context.
+    bmc.expect(Expect::expand(
+        &ids.managers_id,
+        json!({
+            ODATA_ID: &ids.managers_id,
+            ODATA_TYPE: MANAGER_COLLECTION_DATA_TYPE,
+            "Id": "Managers",
+            "Name": "Manager Collection",
+            "Members": [
+                manager_payload_with_id(&bmc_0_id),
+                {
+                    "@odata.context": "/redfish/v1/$metadata#Manager.Manager",
+                    ODATA_ID: &hgx_bmc_id
+                }
+            ]
+        }),
+    ));
+
+    let collection = service_root.managers().await?.unwrap();
+    let links = collection.member_links();
+    assert_eq!(links.len(), 2);
+    assert_eq!(links[0].odata_id().to_string(), bmc_0_id);
+    assert_eq!(links[1].odata_id().to_string(), hgx_bmc_id);
+
+    // Already-expanded BMC_0 upgrades without an extra GET request.
+    let host_manager = links[0].upgrade::<Manager<Bmc>>().await?;
+    assert_eq!(host_manager.raw().odata_id.to_string(), bmc_0_id);
+
+    // A failing proxied HGX_BMC_0 fetch does not affect the host manager.
+    bmc.expect(Expect::get(&hgx_bmc_id, json!({})));
+    assert!(links[1].upgrade::<Manager<Bmc>>().await.is_err());
+
+    Ok(())
+}
+
 struct Ids {
     root_id: ODataId,
     managers_id: String,
