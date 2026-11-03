@@ -391,29 +391,32 @@ async fn ami_viking_missing_chassis_name_workaround() -> Result<(), Box<dyn StdE
 
 #[test]
 async fn ami_gb300_disables_expand_for_chassis_collection() -> Result<(), Box<dyn StdError>> {
-    // Platform under test: Grace-based NVIDIA GB300 host BMC (AMI, RtpVersion 13.09.1).
+    // Platform under test: Grace-based NVIDIA GB300 host BMC (AMI, RtpVersion 13.09.1 and 13.11).
     // Quirk under test: its `$expand` drops Required fields (Id/Name/ChassisType)
     // from embedded members, so the collection is fetched with a plain GET and
     // members are fetched individually (complete) rather than via `$expand`.
-    let bmc = Arc::new(Bmc::default());
-    let ids = ids();
-    let root = expect_gb300_service_root(
-        bmc.clone(),
-        &ids,
-        json!({
-            "Chassis": { ODATA_ID: &ids.chassis_collection_id }
-        }),
-    )
-    .await?;
-    // A plain (non-`$expand`) collection GET; if the quirk did not apply the
-    // collection would be fetched via `$expand` and this expectation would not
-    // match.
-    expect_chassis_collection(bmc.clone(), &ids);
+    for rtp_version in ["13.09.1", "13.11"] {
+        let bmc = Arc::new(Bmc::default());
+        let ids = ids();
+        let root = expect_gb300_service_root(
+            bmc.clone(),
+            &ids,
+            rtp_version,
+            json!({
+                "Chassis": { ODATA_ID: &ids.chassis_collection_id }
+            }),
+        )
+        .await?;
+        // A plain (non-`$expand`) collection GET; if the quirk did not apply the
+        // collection would be fetched via `$expand` and this expectation would not
+        // match.
+        expect_chassis_collection(bmc.clone(), &ids);
 
-    let collection = root.chassis().await?.unwrap();
-    expect_chassis_get(bmc.clone(), &ids, valid_chassis_payload(&ids));
-    let members = collection.members().await?;
-    assert_eq!(members.len(), 1);
+        let collection = root.chassis().await?.unwrap();
+        expect_chassis_get(bmc.clone(), &ids, valid_chassis_payload(&ids));
+        let members = collection.members().await?;
+        assert_eq!(members.len(), 1);
+    }
 
     Ok(())
 }
@@ -832,11 +835,12 @@ async fn expect_viking_service_root(
 async fn expect_gb300_service_root(
     bmc: Arc<Bmc>,
     ids: &Ids,
+    rtp_version: &str,
     fields: Value,
 ) -> Result<ServiceRoot<Bmc>, Box<dyn StdError>> {
     bmc.expect(Expect::get(
         &ids.root_id,
-        ami_service_root(&ids.root_id, "1.21.1", Some("13.09.1"), fields),
+        ami_service_root(&ids.root_id, "1.21.1", Some(rtp_version), fields),
     ));
     ServiceRoot::new(bmc).await.map_err(Into::into)
 }

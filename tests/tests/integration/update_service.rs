@@ -116,6 +116,57 @@ async fn list_dell_fw_inventores() -> Result<(), Box<dyn StdError>> {
 }
 
 #[test]
+async fn firmware_inventory_resolves_odata_context_reference_stubs() -> Result<(), Box<dyn StdError>>
+{
+    let bmc = Arc::new(Bmc::default());
+    let root_id = ODataId::service_root();
+    let update_service = get_update_service(bmc.clone(), &root_id, "AMI").await?;
+    let update_service_raw = update_service.raw();
+    let update_service_id = update_service_raw.odata_id();
+    let fw_inventories_id = format!("{update_service_id}/FirmwareInventory");
+    let local_fw_id = format!("{fw_inventories_id}/BMC_Firmware");
+    let proxied_fw_id = format!("{fw_inventories_id}/HGX_FW_BMC_0");
+
+    bmc.expect(Expect::expand(
+        &fw_inventories_id,
+        json!({
+            ODATA_ID: &fw_inventories_id,
+            ODATA_TYPE: &SW_INVENTORIES_DATA_TYPE,
+            "Name": "Firmware Inventory Collection",
+            "Members": [
+                {
+                    "@odata.id": &local_fw_id,
+                    "@odata.type": &SW_INVENTORY_DATA_TYPE,
+                    "Id": "BMC_Firmware",
+                    "Name": "BMC Firmware",
+                    "Version": "13.11"
+                },
+                {
+                    "@odata.context": "/redfish/v1/$metadata#SoftwareInventory.SoftwareInventory",
+                    "@odata.id": &proxied_fw_id
+                }
+            ]
+        }),
+    ));
+    bmc.expect(Expect::get(
+        &proxied_fw_id,
+        json!({
+            "@odata.id": &proxied_fw_id,
+            "@odata.type": &SW_INVENTORY_DATA_TYPE,
+            "Id": "HGX_FW_BMC_0",
+            "Name": "HGX_FW_BMC_0",
+            "Version": "25.09"
+        }),
+    ));
+
+    let inventories = update_service.firmware_inventories().await?.unwrap();
+    assert_eq!(inventories.len(), 2);
+    assert_eq!(inventories[0].raw().id, "BMC_Firmware");
+    assert_eq!(inventories[1].raw().id, "HGX_FW_BMC_0");
+    Ok(())
+}
+
+#[test]
 async fn ami_viking_missing_root_update_service_nav_workaround() -> Result<(), Box<dyn StdError>> {
     let bmc = Arc::new(Bmc::default());
     let root_id = ODataId::service_root();

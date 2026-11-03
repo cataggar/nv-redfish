@@ -65,10 +65,6 @@ impl<'a> RootEvidence<'a> {
     fn redfish_version_is(&self, version: &str) -> bool {
         self.redfish_version == Some(version)
     }
-
-    fn ami_rtp_version_is(&self, version: &str) -> bool {
-        self.ami_rtp_version == Some(version)
-    }
 }
 
 // One quirk a device can have; each is read by one `BmcQuirks` predicate.
@@ -184,7 +180,7 @@ const RULES: &[Rule] = &[
     // The GB300 host BMC on AMI firmware, told apart from other AMI BMCs by
     // the OEM `RtpVersion` its service root exposes.
     Rule {
-        covers: |root| root.vendor_is("AMI") && root.ami_rtp_version_is("13.09.1"),
+        covers: |root| root.vendor_is("AMI") && root.ami_rtp_version.is_some(),
         quirks: &[Quirk::ExpandIsNotWorkingProperly],
     },
     // NVIDIA's BMC firmware.
@@ -656,6 +652,10 @@ mod tests {
             ),
             (
                 json!({ "Vendor": "AMI", "Oem": { "Ami": { "RtpVersion": "13.09.1" } } }),
+                &[Quirk::RejectsOwnEtag, Quirk::ExpandIsNotWorkingProperly],
+            ),
+            (
+                json!({ "Vendor": "AMI", "Oem": { "Ami": { "RtpVersion": "13.11" } } }),
                 &[Quirk::RejectsOwnEtag, Quirk::ExpandIsNotWorkingProperly],
             ),
             (json!({ "Vendor": "AMI" }), &[Quirk::RejectsOwnEtag]),

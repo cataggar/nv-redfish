@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::entity_link::EntityLink;
+use crate::entity_link::FromLink;
 use crate::resource::ResetType;
 use crate::schema::manager::Manager as ManagerSchema;
 use crate::schema::manager::ManagerUpdate;
@@ -25,7 +27,11 @@ use nv_redfish_core::EntityTypeRef as _;
 use nv_redfish_core::ModificationResponse;
 use nv_redfish_core::NavProperty;
 use serde_json::json;
+use std::future::Future;
 use std::sync::Arc;
+
+/// Lazy link to a manager.
+pub type ManagerLink<B> = EntityLink<B, ManagerSchema>;
 
 #[cfg(feature = "manager-network-protocol")]
 use super::network_protocol::ManagerNetworkProtocol;
@@ -369,5 +375,16 @@ impl<B: Bmc> Manager<B> {
     #[cfg(feature = "oem-ami")]
     pub async fn oem_ami_config_bmc(&self) -> Result<Option<AmiConfigBmc<B>>, Error<B>> {
         AmiConfigBmc::new(&self.bmc, &self.data).await
+    }
+}
+
+impl<B: Bmc> FromLink<B> for Manager<B> {
+    type Schema = ManagerSchema;
+
+    fn from_link(
+        bmc: &NvBmc<B>,
+        nav: &NavProperty<Self::Schema>,
+    ) -> impl Future<Output = Result<Self, Error<B>>> + Send {
+        Self::new(bmc, nav)
     }
 }

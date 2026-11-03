@@ -56,7 +56,9 @@ use std::convert::identity;
 use std::sync::Arc;
 
 #[doc(inline)]
-pub use item::{BootOptionReference, BootUpdate, ComputerSystem, ComputerSystemUpdate};
+pub use item::{
+    BootOptionReference, BootUpdate, ComputerSystem, ComputerSystemLink, ComputerSystemUpdate,
+};
 
 #[doc(inline)]
 #[cfg(feature = "bios")]
@@ -157,6 +159,19 @@ impl<B: Bmc> SystemCollection<B> {
             members.push(ComputerSystem::new(&self.bmc, m).await?);
         }
         Ok(members)
+    }
+
+    /// Return links to all computer system members without fetching them.
+    ///
+    /// Call [`.upgrade::<ComputerSystem<B>>()`](crate::entity_link::EntityLink::upgrade)
+    /// on individual links to fetch only the systems you need.
+    #[must_use]
+    pub fn member_links(&self) -> Vec<ComputerSystemLink<B>> {
+        self.collection
+            .members
+            .iter()
+            .map(|member| ComputerSystemLink::new(&self.bmc, member.clone()))
+            .collect()
     }
 }
 

@@ -36,6 +36,7 @@ use std::convert::identity;
 use std::sync::Arc;
 
 pub use item::Manager;
+pub use item::ManagerLink;
 #[cfg(feature = "manager-network-protocol")]
 pub use network_protocol::ManagerNetworkProtocol;
 #[cfg(feature = "manager-network-protocol")]
@@ -104,6 +105,19 @@ impl<B: Bmc> ManagerCollection<B> {
             members.push(Manager::new(&self.bmc, m).await?);
         }
         Ok(members)
+    }
+
+    /// Return links to all manager members without fetching them.
+    ///
+    /// Call [`.upgrade::<Manager<B>>()`](crate::entity_link::EntityLink::upgrade)
+    /// on individual links to fetch only the managers you need.
+    #[must_use]
+    pub fn member_links(&self) -> Vec<ManagerLink<B>> {
+        self.collection
+            .members
+            .iter()
+            .map(|member| ManagerLink::new(&self.bmc, member.clone()))
+            .collect()
     }
 }
 
